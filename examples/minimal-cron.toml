@@ -1,0 +1,21 @@
+[sources.cron]
+type = "cron"
+
+[[triggers]]
+source = "cron"
+emit = "2-trigger"
+arguments = "*/2 * * * * *"
+
+[[triggers]]
+source = "cron"
+emit = "3-trigger"
+arguments = "*/3 * * * * *"
+
+[handlers.debug]
+type = "debug"
+
+[[actions]]
+handler = "debug"
+event = "minute-trigger"
+emit = "minute-debug"
+arguments = []

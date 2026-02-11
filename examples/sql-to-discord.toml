@@ -1,0 +1,35 @@
+[sources.cron]
+type = "cron"
+
+[handlers.sensor-sql]
+type = "sql"
+connection-string = "sqlite://examples/temperature.db"
+
+[handlers.discord-dm]
+type = "discord"
+user-id = "${DISCORD_USER_ID}"
+
+[[triggers]]
+source = "cron"
+emit = "temperature-trigger"
+arguments = "* * * * *"
+
+[[actions]]
+handler = "sensor-sql"
+event = "temperature-trigger"
+emit = "temperature-query"
+arguments = """
+  SELECT cast(value as real)
+  FROM sensors
+  WHERE sensor_id = 'temp_0'
+  ORDER BY timestamp DESC
+  LIMIT 1
+"""
+
+[[actions]]
+handler = "discord-dm"
+event = "temperature-query"
+emit = "temperature-message"
+arguments.message = "Current reading"
+arguments.include-event = true
+

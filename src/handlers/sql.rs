@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use sqlx::{any::install_default_drivers, AnyConnection, Connection, Row};
 
-use crate::{errors::AncymonError, query::QuerySource};
+use crate::{
+    errors::{AncymonError, BuildError, RuntimeError},
+    handlers::EventHandler,
+};
 
 #[derive(Debug, Default, Deserialize)]
 struct SqlConfig {
@@ -15,17 +18,23 @@ pub struct SqlQuery {
     config: SqlConfig,
 }
 #[async_trait]
-impl QuerySource for SqlQuery {
+impl EventHandler for SqlQuery {
     async fn init(&mut self, config: &toml::Table) -> Result<(), AncymonError> {
         install_default_drivers();
         self.config = config
             .clone()
             .try_into()
-            .map_err(|_| AncymonError::ConfigError)?;
+            .map_err(|e| BuildError::Handler(Box::new(e)))?;
         Ok(())
     }
-    async fn execute(&self, arguments: &toml::Value) -> Result<String, AncymonError> {
-        let query = arguments.as_str().ok_or(AncymonError::QuerySourceError)?;
+    async fn execute(
+        &self,
+        event: Option<&toml::Value>,
+        arguments: &toml::Value,
+    ) -> Result<Option<toml::Value>, AncymonError> {
+        let query = arguments.as_str().ok_or(RuntimeError::InvalidArgumentType(
+            "Expected string as `arguments` for SqlHandler".to_string(),
+        ))?;
         let mut connection = AnyConnection::connect(&self.config.connection_string)
             .await
             .unwrap();
@@ -48,6 +57,6 @@ impl QuerySource for SqlQuery {
         }
         // let row = sqlx::query(query).fetch_one(&mut connection).await.unwrap();
         // println!("{:?}", row.get::<i32, _>(0));
-        Ok(String::new())
+        Ok(Some(toml::Value::Integer(0)))
     }
 }

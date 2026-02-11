@@ -5,9 +5,15 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1"
+chrono = "0.4"
+cron = "0.15"
 regex = "1.12"
 serde = { version = "1.0", features = ["derive"] }
 serenity = { version = "0.12", features = ["client", "gateway", "rustls_backend", "model"] }
 sqlx = { version = "0.8", features = ["any", "runtime-tokio-native-tls", "sqlite"]}
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
 toml = "0.9"
+tracing = "0.1"
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
