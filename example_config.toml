@@ -1,0 +1,12 @@
+[query-sources.sensor-sql]
+type = "sql"
+connection-string = "sqlite://iot.db"
+
+[[events]]
+query-source = "sensor-sql"
+arguments = """
+  SELECT timestamp, sensor_id, cast(value as real), unixepoch() as value
+  FROM sensors
+  WHERE timestamp > unixepoch() - 172 * 3600
+  ORDER BY timestamp DESC
+"""
