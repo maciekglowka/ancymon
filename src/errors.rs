@@ -1,6 +1,4 @@
-use std::error::Error;
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AncymonError {
     BuildError(BuildError),
     ConfigError(ConfigError),
@@ -13,7 +11,7 @@ impl std::fmt::Display for AncymonError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ConfigError {
     ParsingError,
     MissingValue(String),
@@ -36,10 +34,10 @@ impl From<ConfigError> for AncymonError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum BuildError {
-    Handler(Box<dyn Error>),
-    Source(Box<dyn Error>),
+    Handler(String),
+    Source(String),
 }
 
 impl std::fmt::Display for BuildError {
@@ -54,11 +52,12 @@ impl From<BuildError> for AncymonError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum RuntimeError {
     InvalidArgumentType(String),
-    Handler(Box<dyn Error>),
-    Source(Box<dyn Error>),
+    Bot(String),
+    Handler(String),
+    Source(String),
 }
 
 impl std::fmt::Display for RuntimeError {

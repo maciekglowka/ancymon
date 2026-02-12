@@ -72,9 +72,12 @@ impl TriggerSource for CronTrigger {
             tokio::time::sleep(duration.to_std().unwrap()).await;
             let value = toml::Value::Integer(deadline.timestamp());
             for i in indices {
-                tx.send(Event::new(&self.triggers[i].emit, Some(value.clone())))
-                    .await
-                    .unwrap();
+                tx.send(Event::new(
+                    self.triggers[i].emit.to_string(),
+                    Ok(Some(value.clone())),
+                ))
+                .await
+                .unwrap();
             }
         }
     }

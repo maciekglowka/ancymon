@@ -24,7 +24,7 @@ impl EventHandler for SqlQuery {
         self.config = config
             .clone()
             .try_into()
-            .map_err(|e| BuildError::Handler(Box::new(e)))?;
+            .map_err(|e| BuildError::Handler(format!("{e}")))?;
         Ok(())
     }
     async fn execute(

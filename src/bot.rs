@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use crate::{
-    actions::Action,
+    actions::{AcceptedInput, Action},
     config::Config,
     errors::{AncymonError, ConfigError},
     events::Event,
@@ -9,26 +9,37 @@ use crate::{
     triggers::{Trigger, TriggerSource},
 };
 
+const RECV_BUFFER_SIZE: usize = 10;
+
 pub struct Bot {
     actions: HashMap<String, Vec<Action>>,
     handlers: HashMap<String, Box<dyn EventHandler + Send>>,
     sources: Vec<Box<dyn TriggerSource + Send>>,
 }
 impl Bot {
-    // pub async fn execute_event(&self, event: &Event) -> Result<(), AncymonError>
-    // {     let source = self.query_sources.get(&event.query_source).unwrap();
-    //     source.execute(&event.arguments).await.unwrap();
-    //     Ok(())
-    // }
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self) -> Result<(), AncymonError> {
         tracing::info!("Bot is starting...");
         let (tx, mut rx) = tokio::sync::mpsc::channel(256);
 
         self.spawn_sources(tx).await;
+        let mut queue = VecDeque::new();
+        let mut buf = Vec::with_capacity(RECV_BUFFER_SIZE);
 
-        while let Some(event) = rx.recv().await {
-            println!("{event:?}");
+        loop {
+            while let Some(event) = queue.pop_front() {
+                // TODO parallelize
+                queue.extend(self.execute_event(&event).await);
+                tracing::info!("Executing event {}", event.name);
+            }
+            // If the queue is empty then wait for a trigger.
+            let received = rx.recv_many(&mut buf, RECV_BUFFER_SIZE).await;
+            if received == 0 {
+                // No more senders
+                break;
+            }
+            queue.extend(buf.drain(..received));
         }
+        Ok(())
     }
 
     async fn spawn_sources(&mut self, tx: tokio::sync::mpsc::Sender<Event>) {
@@ -37,6 +48,42 @@ impl Bot {
             let source_tx = tx.clone();
             tokio::spawn(async move { source.run(source_tx).await });
         }
+    }
+
+    async fn execute_event(&self, event: &Event) -> Vec<Event> {
+        let mut events = Vec::new();
+
+        for action in self.actions.get(&event.name).iter().cloned().flatten() {
+            let Some(handler) = self.handlers.get(&action.handler) else {
+                tracing::error!("Handler not found: {}", action.handler);
+                continue;
+            };
+
+            let result = match (&event.value, action.accepted_input) {
+                (Ok(Some(v)), AcceptedInput::Some) => {
+                    Some(handler.execute(Some(v), &action.arguments).await)
+                }
+                (Ok(None), AcceptedInput::None) => {
+                    Some(handler.execute(None, &action.arguments).await)
+                }
+                (Ok(v), AcceptedInput::Ok) => {
+                    Some(handler.execute(v.as_ref(), &action.arguments).await)
+                }
+                (Err(e), AcceptedInput::Err) => Some(
+                    handler
+                        .execute(
+                            Some(&toml::Value::String(format!("{e}"))),
+                            &action.arguments,
+                        )
+                        .await,
+                ),
+                _ => None,
+            };
+            if let Some(result) = result {
+                events.push(Event::new(action.emit.to_string(), result));
+            }
+        }
+        events
     }
 }
 

@@ -16,6 +16,12 @@ type = "debug"
 
 [[actions]]
 handler = "debug"
-event = "minute-trigger"
-emit = "minute-debug"
+event = "2-trigger"
+emit = "2-debug"
+arguments = []
+
+[[actions]]
+handler = "debug"
+event = "3-trigger"
+emit = "3-debug"
 arguments = []
