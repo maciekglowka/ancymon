@@ -1,8 +1,6 @@
 use serde::{de, Deserialize};
 use std::collections::HashMap;
 
-use crate::errors::AncymonError;
-
 #[derive(Clone, Default, Debug, PartialEq)]
 pub enum Value {
     #[default]
@@ -53,6 +51,54 @@ impl Value {
             return Some(m);
         }
         None
+    }
+    pub fn pretty(&self) -> String {
+        self.pretty_nested(0, true)
+    }
+    fn pretty_nested(&self, level: usize, pad_first: bool) -> String {
+        let base = 2 * level;
+        let pad_exact = |s: &str, w: usize| format!("{:2$}{}", "", s, w);
+        let pad = |s: &str| pad_exact(s, if pad_first { base } else { 0 });
+
+        match self {
+            Self::Null => pad("null"),
+            Self::Bool(b) => pad(if *b { "true" } else { "false" }),
+            // FIXME double format!
+            Self::Integer(i) => pad(&format!("{i}")),
+            Self::Float(f) => pad(&format!("{f}")),
+            Self::String(s) => pad(&format!("\"{s}\"")),
+            Self::Array(a) => {
+                if a.is_empty() {
+                    pad("[]")
+                } else {
+                    pad("[\n")
+                        + a.iter()
+                            .map(|v| v.pretty_nested(level + 1, true) + ",\n")
+                            .reduce(|acc, s| acc + &s)
+                            .unwrap()
+                            .as_str()
+                        + &pad_exact("]", base)
+                }
+            }
+            Self::Map(m) => {
+                if m.is_empty() {
+                    pad("{}")
+                } else {
+                    pad("{\n")
+                        + m.iter()
+                            .map(|(k, v)| {
+                                pad_exact(
+                                    &format!("\"{k}\": {},\n", v.pretty_nested(level + 1, false,)),
+                                    2 * (level + 1),
+                                )
+                            })
+                            .reduce(|acc, s| acc + &s)
+                            .unwrap()
+                            .as_str()
+                        + &pad_exact("}", base)
+                }
+            }
+        }
     }
 }
 
@@ -143,9 +189,9 @@ mod tests {
     }
     #[test]
     fn deserialize_float() {
-        let toml_value = "key = 3.14";
+        let toml_value = "key = 3.17";
         let value = toml::from_str::<Value>(toml_value).unwrap();
-        assert_eq!(value.as_map().unwrap()["key"], Value::Float(3.14));
+        assert_eq!(value.as_map().unwrap()["key"], Value::Float(3.17));
     }
     #[test]
     fn deserialize_bool() {
