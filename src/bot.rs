@@ -1,4 +1,6 @@
-use std::collections::{HashMap, VecDeque};
+use std::{collections::HashMap, sync::Arc};
+
+use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     actions::{AcceptedInput, Action},
@@ -7,104 +9,44 @@ use crate::{
     events::Event,
     handlers::{EventHandler, HandlerBuilder},
     triggers::{Trigger, TriggerSource},
+    values::Value,
 };
 
-const RECV_BUFFER_SIZE: usize = 10;
+const QUEUE_SIZE: usize = 256;
 
-pub struct Bot {
+struct BotContext {
     actions: HashMap<String, Vec<Action>>,
-    handlers: HashMap<String, Box<dyn EventHandler + Send>>,
-    sources: Vec<Box<dyn TriggerSource + Send>>,
-}
-impl Bot {
-    pub async fn run(&mut self) -> Result<(), AncymonError> {
-        tracing::info!("Bot is starting...");
-        let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-
-        self.spawn_sources(tx).await;
-        let mut queue = VecDeque::new();
-        let mut buf = Vec::with_capacity(RECV_BUFFER_SIZE);
-
-        loop {
-            while let Some(event) = queue.pop_front() {
-                // TODO parallelize
-                queue.extend(self.execute_event(&event).await);
-                tracing::info!("Executing event {}", event.name);
-            }
-            // If the queue is empty then wait for a trigger.
-            let received = rx.recv_many(&mut buf, RECV_BUFFER_SIZE).await;
-            if received == 0 {
-                // No more senders
-                break;
-            }
-            queue.extend(buf.drain(..received));
-        }
-        Ok(())
-    }
-
-    async fn spawn_sources(&mut self, tx: tokio::sync::mpsc::Sender<Event>) {
-        for mut source in self.sources.drain(..) {
-            // TODO take join handle
-            let source_tx = tx.clone();
-            tokio::spawn(async move { source.run(source_tx).await });
-        }
-    }
-
-    async fn execute_event(&self, event: &Event) -> Vec<Event> {
-        let mut events = Vec::new();
-
-        for action in self.actions.get(&event.name).iter().cloned().flatten() {
-            let Some(handler) = self.handlers.get(&action.handler) else {
-                tracing::error!("Handler not found: {}", action.handler);
-                continue;
-            };
-
-            let result = match (&event.value, action.accepted_input) {
-                (Ok(Some(v)), AcceptedInput::Some) => {
-                    Some(handler.execute(Some(v), &action.arguments).await)
-                }
-                (Ok(None), AcceptedInput::None) => {
-                    Some(handler.execute(None, &action.arguments).await)
-                }
-                (Ok(v), AcceptedInput::Ok) => {
-                    Some(handler.execute(v.as_ref(), &action.arguments).await)
-                }
-                (Err(e), AcceptedInput::Err) => Some(
-                    handler
-                        .execute(
-                            Some(&toml::Value::String(format!("{e}"))),
-                            &action.arguments,
-                        )
-                        .await,
-                ),
-                _ => None,
-            };
-            if let Some(result) = result {
-                events.push(Event::new(action.emit.to_string(), result));
-            }
-        }
-        events
-    }
+    handlers: HashMap<String, Box<dyn EventHandler + Send + Sync>>,
+    tx: Sender<Event>,
 }
 
 #[derive(Default)]
-pub struct BotBuilder {
+pub struct Bot {
     handler_builders: HashMap<String, Box<dyn HandlerBuilder>>,
-    trigger_sources: HashMap<String, Box<dyn TriggerSource + Send>>,
+    trigger_sources: HashMap<String, Box<dyn TriggerSource + Send + Sync>>,
 }
-impl BotBuilder {
-    pub async fn build(mut self, config: Config) -> Result<Bot, AncymonError> {
+impl Bot {
+    pub async fn run(mut self, config: Config) -> Result<(), AncymonError> {
         let handlers = self.build_handlers(&config).await?;
         let actions = self.build_actions(&config).await?;
-        self.init_trigger_sources(&config).await?;
 
-        Ok(Bot {
+        self.init_trigger_sources(&config).await?;
+        let sources = self.trigger_sources.into_values().collect();
+
+        let (tx, rx) = tokio::sync::mpsc::channel(QUEUE_SIZE);
+
+        let context = BotContext {
             actions,
             handlers,
-            sources: self.trigger_sources.into_values().collect(),
-        })
+            tx: tx.clone(),
+        };
+
+        spawn_sources(sources, tx).await;
+        run(context, rx).await?;
+
+        Ok(())
     }
-    pub fn with_handler<T: HandlerBuilder + 'static>(
+    pub fn with_handler_type<T: HandlerBuilder + 'static>(
         mut self,
         name: impl Into<String>,
         builder: T,
@@ -114,14 +56,14 @@ impl BotBuilder {
         self
     }
 
-    pub fn with_source<T: TriggerSource + Send + 'static>(
+    pub fn with_source_type<T: TriggerSource + Send + Sync + 'static>(
         mut self,
         name: impl Into<String>,
         source: T,
     ) -> Self {
         self.trigger_sources.insert(
             name.into(),
-            Box::new(source) as Box<dyn TriggerSource + Send>,
+            Box::new(source) as Box<dyn TriggerSource + Send + Sync>,
         );
         self
     }
@@ -129,7 +71,7 @@ impl BotBuilder {
     async fn build_handlers(
         &self,
         config: &Config,
-    ) -> Result<HashMap<String, Box<dyn EventHandler + Send>>, AncymonError> {
+    ) -> Result<HashMap<String, Box<dyn EventHandler + Send + Sync>>, AncymonError> {
         let mut handlers = HashMap::new();
 
         for (name, handler_config) in config.handlers.iter() {
@@ -198,5 +140,59 @@ impl BotBuilder {
         }
 
         Ok(())
+    }
+}
+
+async fn run(context: BotContext, mut rx: Receiver<Event>) -> Result<(), AncymonError> {
+    tracing::info!("Ancymon Bot is starting...");
+    let context = Arc::new(context);
+
+    while let Some(event) = rx.recv().await {
+        tracing::info!("Executing event: {}", event.name);
+        // TODO add concurrent events limit? (tokio::Semaphore?)
+        let event_context = Arc::clone(&context);
+        tokio::spawn(execute_event(event, event_context));
+    }
+
+    Ok(())
+}
+
+async fn spawn_sources(sources: Vec<Box<dyn TriggerSource + Send + Sync>>, tx: Sender<Event>) {
+    for mut source in sources {
+        // TODO take join handle ?
+        let source_tx = tx.clone();
+        tokio::spawn(async move { source.run(source_tx).await });
+    }
+}
+
+async fn execute_event(event: Event, context: Arc<BotContext>) {
+    for action in context.actions.get(&event.name).cloned().iter().flatten() {
+        let Some(handler) = context.handlers.get(&action.handler) else {
+            tracing::error!("Handler not found: {}", action.handler);
+            continue;
+        };
+
+        let result = match (&event.value, action.accepted_input) {
+            (Ok(Some(v)), AcceptedInput::Some) => {
+                Some(handler.execute(Some(v), &action.arguments).await)
+            }
+            (Ok(None), AcceptedInput::None) => Some(handler.execute(None, &action.arguments).await),
+            (Ok(v), AcceptedInput::Ok) => {
+                Some(handler.execute(v.as_ref(), &action.arguments).await)
+            }
+            (Err(e), AcceptedInput::Err) => Some(
+                handler
+                    .execute(Some(&Value::String(format!("{e}"))), &action.arguments)
+                    .await,
+            ),
+            _ => None,
+        };
+        if let Some(result) = result {
+            context
+                .tx
+                .send(Event::new(action.emit.to_string(), result))
+                .await
+                .unwrap();
+        }
     }
 }

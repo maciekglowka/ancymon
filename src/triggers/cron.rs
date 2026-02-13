@@ -6,6 +6,7 @@ use crate::{
     errors::{AncymonError, BuildError, ConfigError},
     events::Event,
     triggers::{Trigger, TriggerSource},
+    values::Value,
 };
 
 #[derive(Default)]
@@ -70,7 +71,7 @@ impl TriggerSource for CronTrigger {
             let duration = deadline - Utc::now();
             // FIXME might panic if duration equals 0
             tokio::time::sleep(duration.to_std().unwrap()).await;
-            let value = toml::Value::Integer(deadline.timestamp());
+            let value = Value::Integer(deadline.timestamp());
             for i in indices {
                 tx.send(Event::new(
                     self.triggers[i].emit.to_string(),

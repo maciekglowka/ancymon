@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 
-use crate::errors::AncymonError;
+use crate::{errors::AncymonError, values::Value};
 
 pub mod discord;
 pub mod sql;
 
 pub trait HandlerBuilder {
-    fn build(&self) -> Result<Box<dyn EventHandler + Send>, AncymonError>;
+    fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError>;
 }
 
 #[async_trait]
@@ -16,9 +16,9 @@ pub trait EventHandler {
     }
     async fn execute(
         &self,
-        event: Option<&toml::Value>,
-        arguments: &toml::Value,
-    ) -> Result<Option<toml::Value>, AncymonError>;
+        event: Option<&Value>,
+        arguments: &Value,
+    ) -> Result<Option<Value>, AncymonError>;
 }
 
 pub struct DebugHandler;
@@ -26,9 +26,9 @@ pub struct DebugHandler;
 impl EventHandler for DebugHandler {
     async fn execute(
         &self,
-        event: Option<&toml::Value>,
-        _arguments: &toml::Value,
-    ) -> Result<Option<toml::Value>, AncymonError> {
+        event: Option<&Value>,
+        _arguments: &Value,
+    ) -> Result<Option<Value>, AncymonError> {
         println!("{event:?}");
         Ok(None)
     }
@@ -36,7 +36,7 @@ impl EventHandler for DebugHandler {
 
 pub struct DebugBuilder;
 impl HandlerBuilder for DebugBuilder {
-    fn build(&self) -> Result<Box<dyn EventHandler + Send>, AncymonError> {
+    fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
         Ok(Box::new(DebugHandler))
     }
 }

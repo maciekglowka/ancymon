@@ -3,6 +3,7 @@ pub enum AncymonError {
     BuildError(BuildError),
     ConfigError(ConfigError),
     RuntimeError(RuntimeError),
+    ConversionError(String),
 }
 
 impl std::fmt::Display for AncymonError {
@@ -54,6 +55,7 @@ impl From<BuildError> for AncymonError {
 
 #[derive(Clone, Debug)]
 pub enum RuntimeError {
+    InvalidArguments(String),
     InvalidArgumentType(String),
     Bot(String),
     Handler(String),

@@ -5,6 +5,8 @@ pub mod errors;
 mod events;
 pub mod handlers;
 pub mod triggers;
+pub mod values;
 
-pub use bot::{Bot, BotBuilder};
+pub use bot::Bot;
 pub use config::Config;
+pub use values::Value;
