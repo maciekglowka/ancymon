@@ -16,8 +16,8 @@ pub(crate) struct Action {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
 pub enum AcceptedInput {
     #[default]
-    Some,
-    None,
+    NotNull,
+    Null,
     Ok,
     Err,
 }

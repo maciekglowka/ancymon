@@ -75,7 +75,7 @@ impl TriggerSource for CronTrigger {
             for i in indices {
                 tx.send(Event::new(
                     self.triggers[i].emit.to_string(),
-                    Ok(Some(value.clone())),
+                    Ok(value.clone()),
                 ))
                 .await
                 .unwrap();

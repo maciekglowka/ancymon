@@ -8,6 +8,7 @@ use sqlx::{
 
 use crate::{
     errors::{AncymonError, BuildError, ConfigError, RuntimeError},
+    events::EventValue,
     handlers::{EventHandler, HandlerBuilder},
     values::Value,
 };
@@ -52,11 +53,7 @@ impl EventHandler for SqlHandler {
             .map_err(|e| BuildError::Handler(format!("{e}")))?;
         Ok(())
     }
-    async fn execute(
-        &self,
-        event: Option<&Value>,
-        arguments: &Value,
-    ) -> Result<Option<Value>, AncymonError> {
+    async fn execute(&self, event: &Value, arguments: &Value) -> EventValue {
         let arguments: SqlArguments = arguments.clone().try_into()?;
 
         let mut connection = AnyConnection::connect(&self.config.connection_string)
@@ -92,7 +89,7 @@ impl EventHandler for SqlHandler {
 
         // let row = sqlx::query(query).fetch_one(&mut connection).await.unwrap();
         // println!("{:?}", row.get::<i32, _>(0));
-        Ok(Some(Value::Integer(0)))
+        Ok(Value::Integer(0))
     }
 }
 

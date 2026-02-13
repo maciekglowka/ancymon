@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::{errors::AncymonError, values::Value};
+use crate::{errors::AncymonError, events::EventValue, values::Value};
 
 pub mod discord;
 pub mod sql;
@@ -14,23 +14,15 @@ pub trait EventHandler {
     async fn init(&mut self, config: &toml::Table) -> Result<(), AncymonError> {
         Ok(())
     }
-    async fn execute(
-        &self,
-        event: Option<&Value>,
-        arguments: &Value,
-    ) -> Result<Option<Value>, AncymonError>;
+    async fn execute(&self, event: &Value, arguments: &Value) -> EventValue;
 }
 
 pub struct DebugHandler;
 #[async_trait]
 impl EventHandler for DebugHandler {
-    async fn execute(
-        &self,
-        event: Option<&Value>,
-        _arguments: &Value,
-    ) -> Result<Option<Value>, AncymonError> {
+    async fn execute(&self, event: &Value, _arguments: &Value) -> EventValue {
         println!("{event:?}");
-        Ok(None)
+        Ok(event.clone())
     }
 }
 

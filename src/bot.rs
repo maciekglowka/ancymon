@@ -173,16 +173,16 @@ async fn execute_event(event: Event, context: Arc<BotContext>) {
         };
 
         let result = match (&event.value, action.accepted_input) {
-            (Ok(Some(v)), AcceptedInput::Some) => {
-                Some(handler.execute(Some(v), &action.arguments).await)
+            (Ok(Value::Null), AcceptedInput::Null) => {
+                Some(handler.execute(&Value::Null, &action.arguments).await)
             }
-            (Ok(None), AcceptedInput::None) => Some(handler.execute(None, &action.arguments).await),
-            (Ok(v), AcceptedInput::Ok) => {
-                Some(handler.execute(v.as_ref(), &action.arguments).await)
+            (Ok(v), AcceptedInput::NotNull) if v != &Value::Null => {
+                Some(handler.execute(v, &action.arguments).await)
             }
+            (Ok(v), AcceptedInput::Ok) => Some(handler.execute(v, &action.arguments).await),
             (Err(e), AcceptedInput::Err) => Some(
                 handler
-                    .execute(Some(&Value::String(format!("{e}"))), &action.arguments)
+                    .execute(&Value::String(format!("{e}")), &action.arguments)
                     .await,
             ),
             _ => None,
