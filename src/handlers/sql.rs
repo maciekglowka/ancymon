@@ -3,7 +3,7 @@ use serde::Deserialize;
 use sqlx::{
     any::{install_default_drivers, AnyArguments, AnyRow, AnyTypeInfoKind},
     query::Query,
-    Any, AnyConnection, Column, Connection, Row, TypeInfo,
+    Any, AnyConnection, Column, Connection, Row,
 };
 
 use crate::{
@@ -28,19 +28,23 @@ impl SqlHandler {
         &self,
         connection: &mut AnyConnection,
         query: Query<'a, Any, AnyArguments<'a>>,
-    ) -> Result<(), AncymonError> {
+    ) -> Result<AnyRow, AncymonError> {
         let row = query
             .fetch_one(connection)
             .await
-            .map_err(|e| RuntimeError::Handler(format!("Sql row fetch failed {e}")))?;
-        Ok(())
+            .map_err(|e| RuntimeError::Handler(format!("Sql fetch one failed {e}")))?;
+        Ok(row)
     }
     async fn fetch_many<'a>(
         &self,
         connection: &mut AnyConnection,
         query: Query<'a, Any, AnyArguments<'a>>,
-    ) {
-        query.fetch_all(connection).await;
+    ) -> Result<Vec<AnyRow>, AncymonError> {
+        let rows = query
+            .fetch_all(connection)
+            .await
+            .map_err(|e| RuntimeError::Handler(format!("Sql fetch many failed {e}")))?;
+        Ok(rows)
     }
 }
 #[async_trait]
@@ -60,36 +64,19 @@ impl EventHandler for SqlHandler {
             .await
             .map_err(|e| RuntimeError::Handler(format!("Sql connection failed:{e}")))?;
 
-        // let query = sqlx::query(&arguments.query).bind(2);
+        let query = sqlx::query(&arguments.query).bind(2);
 
-        // if arguments.fetch_many {
-        //     self.fetch_many(&mut connection, query).await;
-        // } else {
-        //     self.fetch_one(&mut connection, query).await;
-        // }
-
-        // let a = query.fetch_one(&mut connection);
-        // let rows = if arguments.fetch_many {
-        //     query.fetch_all(&mut connection)
-        // } else {
-        //     query.fetch_one(&mut connection)
-        // };
-
-        // .unwrap();
-
-        // for row in rows {
-        //     println!(
-        //         "{:?} {:?} {:?} {:?}",
-        //         row.get::<i32, _>(0),
-        //         row.get::<String, _>(1),
-        //         row.get::<f64, _>(2),
-        //         row.get::<i32, _>(3)
-        //     );
-        // }
-
-        // let row = sqlx::query(query).fetch_one(&mut connection).await.unwrap();
-        // println!("{:?}", row.get::<i32, _>(0));
-        Ok(Value::Integer(0))
+        if arguments.fetch_many {
+            let rows = self.fetch_many(&mut connection, query).await?;
+            Ok(Value::Array(
+                rows.iter()
+                    .map(map_row)
+                    .collect::<Result<Vec<_>, AncymonError>>()?,
+            ))
+        } else {
+            let row = self.fetch_one(&mut connection, query).await?;
+            map_row(&row)
+        }
     }
 }
 
@@ -103,7 +90,8 @@ impl HandlerBuilder for SqlBuilder {
 struct SqlArguments {
     query: String,
     fetch_many: bool,
-    bind_input: bool,
+    bind_one: bool,
+    bind_many: bool,
 }
 impl TryFrom<Value> for SqlArguments {
     type Error = AncymonError;
@@ -128,8 +116,13 @@ impl TryFrom<Value> for SqlArguments {
         } else {
             false
         };
-
-        let bind_input = if let Some(v) = map.get("bind-input") {
+        let bind_one = if let Some(v) = map.get("bind-one") {
+            v.as_bool()
+                .ok_or(ConfigError::InvalidValueType("Expected bool".to_string()))?
+        } else {
+            false
+        };
+        let bind_many = if let Some(v) = map.get("bind-many") {
             v.as_bool()
                 .ok_or(ConfigError::InvalidValueType("Expected bool".to_string()))?
         } else {
@@ -139,20 +132,26 @@ impl TryFrom<Value> for SqlArguments {
         Ok(Self {
             query,
             fetch_many,
-            bind_input,
+            bind_one,
+            bind_many,
         })
     }
 }
 
-fn map_row(row: AnyRow) {
-    if row.is_empty() {}
-    if row.len() == 1 {
-        let kind = row.columns().get(0).unwrap().type_info().kind();
-        //     .        let v = row.get(0);
+fn map_row(row: &AnyRow) -> Result<Value, AncymonError> {
+    if row.is_empty() {
+        return Ok(Value::Null);
     }
+    if row.len() == 1 {
+        return map_db_value(row, 0);
+    }
+    let v = (0..row.len())
+        .map(|i| map_db_value(row, i))
+        .collect::<Result<Vec<_>, AncymonError>>()?;
+    Ok(Value::Array(v))
 }
 
-fn map_db_value(row: AnyRow, idx: usize) -> Result<Value, AncymonError> {
+fn map_db_value(row: &AnyRow, idx: usize) -> Result<Value, AncymonError> {
     let kind = row
         .columns()
         .get(idx)
@@ -161,6 +160,7 @@ fn map_db_value(row: AnyRow, idx: usize) -> Result<Value, AncymonError> {
         )))?
         .type_info()
         .kind();
+
     match kind {
         AnyTypeInfoKind::Null => Ok(Value::Null),
         AnyTypeInfoKind::Bool => Ok(Value::Bool(row.try_get::<bool, _>(idx).map_err(|e| {
@@ -182,5 +182,184 @@ fn map_db_value(row: AnyRow, idx: usize) -> Result<Value, AncymonError> {
         AnyTypeInfoKind::Blob => {
             Err(RuntimeError::InvalidArgumentType("Blobs are not supported".to_string()).into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, str::FromStr};
+
+    use super::*;
+
+    async fn db(name: &str) -> (AnyConnection, SqlHandler) {
+        let connection_str = format!("sqlite:file:{name}?mode=memory&cache=shared");
+        let config =
+            toml::Table::from_str(&format!("connection-string = \"{connection_str}\"")).unwrap();
+
+        let mut handler = SqlHandler::default();
+        handler.init(&config).await.unwrap();
+
+        let conn = AnyConnection::connect(&connection_str)
+            .await
+            .map_err(|e| RuntimeError::Handler(format!("Sql connection failed:{e}")))
+            .unwrap();
+        (conn, handler)
+    }
+
+    #[tokio::test]
+    async fn fetch_one() {
+        let (mut conn, handler) = db("fetch_one").await;
+        sqlx::query("CREATE TABLE sensor ( id text, value integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 3)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 5)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Null,
+                &Value::Map(HashMap::from_iter(vec![(
+                    "query".to_string(),
+                    Value::String("SELECT id, value FROM sensor ORDER BY value DESC;".to_string()),
+                )])),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            result,
+            Value::Array(vec![Value::String("temp".to_string()), Value::Integer(7)])
+        )
+    }
+    #[tokio::test]
+    async fn fetch_one_scalar() {
+        let (mut conn, handler) = db("fetch_one_scalar").await;
+        sqlx::query("CREATE TABLE sensor ( id text, value integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 9)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 15)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Null,
+                &Value::Map(HashMap::from_iter(vec![(
+                    "query".to_string(),
+                    Value::String("SELECT value FROM sensor ORDER BY value;".to_string()),
+                )])),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, Value::Integer(7))
+    }
+    #[tokio::test]
+    async fn fetch_many() {
+        let (mut conn, handler) = db("fetch_many").await;
+        sqlx::query("CREATE TABLE sensor ( id text, value integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 3)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 5)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Null,
+                &Value::Map(HashMap::from_iter(vec![
+                    (
+                        "query".to_string(),
+                        Value::String(
+                            "SELECT id, value FROM sensor ORDER BY value DESC;".to_string(),
+                        ),
+                    ),
+                    ("fetch-many".to_string(), Value::Bool(true)),
+                ])),
+            )
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(
+            arr[0],
+            Value::Array(vec![Value::String("temp".to_string()), Value::Integer(7)])
+        );
+        assert_eq!(
+            arr[1],
+            Value::Array(vec![Value::String("temp".to_string()), Value::Integer(5)])
+        );
+        assert_eq!(
+            arr[2],
+            Value::Array(vec![Value::String("temp".to_string()), Value::Integer(3)])
+        );
+    }
+    #[tokio::test]
+    async fn fetch_many_scalar() {
+        let (mut conn, handler) = db("fetch_many_scalar").await;
+        sqlx::query("CREATE TABLE sensor ( id text, value integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 3)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 5)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Null,
+                &Value::Map(HashMap::from_iter(vec![
+                    (
+                        "query".to_string(),
+                        Value::String("SELECT value FROM sensor ORDER BY value DESC;".to_string()),
+                    ),
+                    ("fetch-many".to_string(), Value::Bool(true)),
+                ])),
+            )
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr[0], Value::Integer(7));
+        assert_eq!(arr[1], Value::Integer(5));
+        assert_eq!(arr[2], Value::Integer(3));
     }
 }
