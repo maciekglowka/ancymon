@@ -151,6 +151,18 @@ fn map_row(row: &AnyRow) -> Result<Value, AncymonError> {
     Ok(Value::Array(v))
 }
 
+macro_rules! map_nullable {
+    ($variant:ident, $row:ident, $ty:ty, $idx:expr) => {
+        if let Some(value) = $row.try_get::<Option<$ty>, _>($idx).map_err(|e| {
+            RuntimeError::Handler(format!("Invalid type for column at index {}. {}", $idx, e))
+        })? {
+            Value::$variant(value)
+        } else {
+            Value::Null
+        }
+    };
+}
+
 fn map_db_value(row: &AnyRow, idx: usize) -> Result<Value, AncymonError> {
     let kind = row
         .columns()
@@ -161,24 +173,16 @@ fn map_db_value(row: &AnyRow, idx: usize) -> Result<Value, AncymonError> {
         .type_info()
         .kind();
 
+    println!("{kind:?}");
+
     match kind {
         AnyTypeInfoKind::Null => Ok(Value::Null),
-        AnyTypeInfoKind::Bool => Ok(Value::Bool(row.try_get::<bool, _>(idx).map_err(|e| {
-            RuntimeError::Handler(format!("Expected bool at column index {idx}. {e}"))
-        })?)),
+        AnyTypeInfoKind::Bool => Ok(map_nullable!(Bool, row, bool, idx)),
         AnyTypeInfoKind::SmallInt | AnyTypeInfoKind::Integer | AnyTypeInfoKind::BigInt => {
-            Ok(Value::Integer(row.try_get::<i64, _>(idx).map_err(|e| {
-                RuntimeError::Handler(format!("Expected integer at column index {idx}. {e}"))
-            })?))
+            Ok(map_nullable!(Integer, row, i64, idx))
         }
-        AnyTypeInfoKind::Real | AnyTypeInfoKind::Double => {
-            Ok(Value::Float(row.try_get::<f64, _>(idx).map_err(|e| {
-                RuntimeError::Handler(format!("Expected float at column index {idx}. {e}"))
-            })?))
-        }
-        AnyTypeInfoKind::Text => Ok(Value::String(row.try_get::<String, _>(idx).map_err(
-            |e| RuntimeError::Handler(format!("Expected string at column index {idx}. {e}")),
-        )?)),
+        AnyTypeInfoKind::Real | AnyTypeInfoKind::Double => Ok(map_nullable!(Float, row, f64, idx)),
+        AnyTypeInfoKind::Text => Ok(map_nullable!(String, row, String, idx)),
         AnyTypeInfoKind::Blob => {
             Err(RuntimeError::InvalidArgumentType("Blobs are not supported".to_string()).into())
         }
@@ -361,5 +365,42 @@ mod tests {
         assert_eq!(arr[0], Value::Integer(7));
         assert_eq!(arr[1], Value::Integer(5));
         assert_eq!(arr[2], Value::Integer(3));
+    }
+
+    #[tokio::test]
+    async fn fetch_types() {
+        let (mut conn, handler) = db("fetch_types").await;
+        // Apparently bool is not supported at the moment by sqlx@sqlite
+        sqlx::query("CREATE TABLE sensor ( id text, ts integer, value real, extra integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO sensor(id, ts, value, extra) VALUES ('temp', 1771072386, 23.75, null)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Null,
+                &Value::Map(HashMap::from_iter(vec![(
+                    "query".to_string(),
+                    Value::String("SELECT id, ts, value, extra FROM sensor;".to_string()),
+                )])),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Value::Array(vec![
+                Value::String("temp".to_string()),
+                Value::Integer(1771072386),
+                Value::Float(23.75),
+                Value::Null,
+            ])
+        )
     }
 }
