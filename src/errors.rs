@@ -14,7 +14,7 @@ impl std::fmt::Display for AncymonError {
 
 #[derive(Clone, Debug)]
 pub enum ConfigError {
-    ParsingError,
+    ParsingError(String),
     MissingValue(String),
     InvalidValue(String),
     InvalidValueType(String),

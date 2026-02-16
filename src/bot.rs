@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -6,7 +6,7 @@ use crate::{
     actions::{AcceptedInput, Action},
     config::Config,
     errors::{AncymonError, ConfigError},
-    events::Event,
+    events::{pack_error, Event},
     handlers::{EventHandler, HandlerBuilder},
     triggers::{Trigger, TriggerSource},
     values::Value,
@@ -46,6 +46,7 @@ impl Bot {
 
         Ok(())
     }
+
     pub fn with_handler_type<T: HandlerBuilder + 'static>(
         mut self,
         name: impl Into<String>,
@@ -166,33 +167,431 @@ async fn spawn_sources(sources: Vec<Box<dyn TriggerSource + Send + Sync>>, tx: S
 }
 
 async fn execute_event(event: Event, context: Arc<BotContext>) {
-    for action in context.actions.get(&event.name).cloned().iter().flatten() {
-        let Some(handler) = context.handlers.get(&action.handler) else {
-            tracing::error!("Handler not found: {}", action.handler);
-            continue;
+    let Some(actions) = context.actions.get(&event.name) else {
+        return;
+    };
+    let entries = actions
+        .iter()
+        .enumerate()
+        .flat_map(|(i, action)| match (&event.value, action.accepted_input) {
+            (Ok(Value::Null), AcceptedInput::Null) => Some(i),
+            (Ok(v), AcceptedInput::NotNull) if v != &Value::Null => Some(i),
+            (Ok(_), AcceptedInput::Ok) => Some(i),
+            (Err(_), AcceptedInput::Err) => Some(i),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if entries.len() == 1 {
+        // Fast track no spawn.
+        execute_single(event, entries[0], &context).await;
+        return;
+    }
+
+    for action_idx in entries {
+        let context = Arc::clone(&context);
+        let event = event.clone();
+        tokio::spawn(async move { execute_single(event, action_idx, &context).await });
+    }
+}
+
+async fn execute_single(event: Event, action_idx: usize, context: &Arc<BotContext>) {
+    let Some(actions) = context.actions.get(&event.name) else {
+        // Should never actually happen.
+        return;
+    };
+    let action = &actions[action_idx];
+    let Some(handler) = context.handlers.get(&action.handler) else {
+        // Should never actually happen.
+        tracing::error!("Handler not found: {}", action.handler);
+        return;
+    };
+
+    let value = match &event.value {
+        Ok(v) => v,
+        Err(e) => e,
+    };
+    let mut retries = action.max_retries;
+
+    loop {
+        let result = match handler.execute(value, &action.arguments).await {
+            Ok(a) => Ok(a),
+            Err(e) => {
+                tracing::error!(
+                    "Action execution failed: {e}. Retrying in {}s",
+                    action.retry_delay
+                );
+                Err(pack_error(value.clone(), e))
+            }
         };
 
-        let result = match (&event.value, action.accepted_input) {
-            (Ok(Value::Null), AcceptedInput::Null) => {
-                Some(handler.execute(&Value::Null, &action.arguments).await)
-            }
-            (Ok(v), AcceptedInput::NotNull) if v != &Value::Null => {
-                Some(handler.execute(v, &action.arguments).await)
-            }
-            (Ok(v), AcceptedInput::Ok) => Some(handler.execute(v, &action.arguments).await),
-            (Err(e), AcceptedInput::Err) => Some(
-                handler
-                    .execute(&Value::String(format!("{e}")), &action.arguments)
-                    .await,
-            ),
-            _ => None,
-        };
-        if let Some(result) = result {
-            context
-                .tx
-                .send(Event::new(action.emit.to_string(), result))
-                .await
-                .unwrap();
+        let retry = result.is_err() && retries > 0;
+        context
+            .tx
+            .send(Event::new(action.emit.to_string(), result))
+            .await
+            .unwrap();
+
+        if retry {
+            retries -= 1;
+            tokio::time::sleep(Duration::from_secs(action.retry_delay)).await;
+            continue;
         }
+        break;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use crate::triggers::StartupTrigger;
+
+    use super::*;
+
+    struct CounterHandler(Arc<AtomicU64>);
+    #[async_trait]
+    impl EventHandler for CounterHandler {
+        async fn execute(&self, _: &Value, arguments: &Value) -> Result<Value, AncymonError> {
+            let a = arguments.as_int().ok_or(ConfigError::InvalidValue(format!(
+                "Invalid arguments {arguments:?}"
+            )))? as u64;
+            let v = self.0.fetch_add(a, Ordering::Relaxed);
+            Ok(Value::Integer(v as i64))
+        }
+    }
+    struct CounterBuilder(Arc<AtomicU64>);
+    impl HandlerBuilder for CounterBuilder {
+        fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
+            Ok(Box::new(CounterHandler(self.0.clone())))
+        }
+    }
+
+    async fn assert_atomic(var: &Arc<AtomicU64>, expected: u64, timeout: u64) {
+        tokio::time::timeout(Duration::from_millis(timeout), async move {
+            while var.load(Ordering::Relaxed) != expected {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn trigger() {
+        let config = r#"
+          [sources.startup]  
+          type = "startup"
+
+          [[triggers]]
+          source = "startup"
+          emit = "start"
+
+          [handlers.counter]
+          type = "counter"
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = ""
+          arguments = 13
+        "#;
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let count = Arc::new(AtomicU64::new(0));
+                let spawned_count = count.clone();
+
+                let config = Config::new(config).unwrap();
+
+                let bot = tokio::task::spawn_local(async move {
+                    Bot::default()
+                        .with_source_type("startup", StartupTrigger::default())
+                        .with_handler_type("counter", CounterBuilder(spawned_count))
+                        .run(config)
+                        .await
+                        .unwrap()
+                });
+                assert_atomic(&count, 13, 100).await;
+                bot.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn trigger_chained() {
+        let config = r#"
+          [sources.startup]  
+          type = "startup"
+
+          [[triggers]]
+          source = "startup"
+          emit = "start"
+
+          [handlers.counter]
+          type = "counter"
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "middle"
+          arguments = 13
+
+          [[actions]]
+          handler = "counter"
+          event = "middle"
+          emit = "end"
+          arguments = 17
+        "#;
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let count = Arc::new(AtomicU64::new(0));
+                let spawned_count = count.clone();
+
+                let config = Config::new(config).unwrap();
+
+                let bot = tokio::task::spawn_local(async move {
+                    Bot::default()
+                        .with_source_type("startup", StartupTrigger::default())
+                        .with_handler_type("counter", CounterBuilder(spawned_count))
+                        .run(config)
+                        .await
+                        .unwrap()
+                });
+                assert_atomic(&count, 30, 100).await;
+                bot.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn trigger_parallel() {
+        let config = r#"
+          [sources.startup]  
+          type = "startup"
+
+          [[triggers]]
+          source = "startup"
+          emit = "start"
+
+          [handlers.counter]
+          type = "counter"
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "end-1"
+          arguments = 13
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "end-2"
+          arguments = 17
+        "#;
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let count = Arc::new(AtomicU64::new(0));
+                let spawned_count = count.clone();
+
+                let config = Config::new(config).unwrap();
+
+                let bot = tokio::task::spawn_local(async move {
+                    Bot::default()
+                        .with_source_type("startup", StartupTrigger::default())
+                        .with_handler_type("counter", CounterBuilder(spawned_count))
+                        .run(config)
+                        .await
+                        .unwrap()
+                });
+                assert_atomic(&count, 30, 100).await;
+                bot.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn retry_err() {
+        let config = r#"
+          [sources.startup]  
+          type = "startup"
+
+          [[triggers]]
+          source = "startup"
+          emit = "start"
+
+          [handlers.counter]
+          type = "counter"
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "middle"
+          arguments = "13"
+          max-retries = 5
+
+          [[actions]]
+          handler = "counter"
+          event = "middle"
+          emit = "end"
+          accepted-input = "Err"
+          arguments = 17
+        "#;
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let count = Arc::new(AtomicU64::new(0));
+                let spawned_count = count.clone();
+
+                let config = Config::new(config).unwrap();
+
+                let bot = tokio::task::spawn_local(async move {
+                    Bot::default()
+                        .with_source_type("startup", StartupTrigger::default())
+                        .with_handler_type("counter", CounterBuilder(spawned_count))
+                        .run(config)
+                        .await
+                        .unwrap()
+                });
+                assert_atomic(&count, (5 + 1) * 17, 100).await;
+                bot.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn retry_err_parallel() {
+        let config = r#"
+          [sources.startup]  
+          type = "startup"
+
+          [[triggers]]
+          source = "startup"
+          emit = "start"
+
+          [handlers.counter]
+          type = "counter"
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "middle-1"
+          arguments = "13"
+          max-retries = 5
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "middle-2"
+          arguments = "13"
+          max-retries = 3
+
+          [[actions]]
+          handler = "counter"
+          event = "middle-1"
+          emit = "end"
+          accepted-input = "Err"
+          arguments = 17
+
+          [[actions]]
+          handler = "counter"
+          event = "middle-2"
+          emit = "end"
+          accepted-input = "Err"
+          arguments = 19
+        "#;
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let count = Arc::new(AtomicU64::new(0));
+                let spawned_count = count.clone();
+
+                let config = Config::new(config).unwrap();
+
+                let bot = tokio::task::spawn_local(async move {
+                    Bot::default()
+                        .with_source_type("startup", StartupTrigger::default())
+                        .with_handler_type("counter", CounterBuilder(spawned_count))
+                        .run(config)
+                        .await
+                        .unwrap()
+                });
+                assert_atomic(&count, (5 + 1) * 17 + (3 + 1) * 19, 100).await;
+                bot.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn retry_err_mixed() {
+        let config = r#"
+          [sources.startup]  
+          type = "startup"
+
+          [[triggers]]
+          source = "startup"
+          emit = "start"
+
+          [handlers.counter]
+          type = "counter"
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "middle-1"
+          arguments = 13
+          max-retries = 5
+
+          [[actions]]
+          handler = "counter"
+          event = "start"
+          emit = "middle-2"
+          arguments = "13"
+          max-retries = 3
+
+          [[actions]]
+          handler = "counter"
+          event = "middle-1"
+          emit = "end"
+          accepted-input = "Err"
+          arguments = 17
+
+          [[actions]]
+          handler = "counter"
+          event = "middle-2"
+          emit = "end"
+          accepted-input = "Err"
+          arguments = 19
+        "#;
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let count = Arc::new(AtomicU64::new(0));
+                let spawned_count = count.clone();
+
+                let config = Config::new(config).unwrap();
+
+                let bot = tokio::task::spawn_local(async move {
+                    Bot::default()
+                        .with_source_type("startup", StartupTrigger::default())
+                        .with_handler_type("counter", CounterBuilder(spawned_count))
+                        .run(config)
+                        .await
+                        .unwrap()
+                });
+                // First one succeeds immediately, second one goes through all the retries.
+                assert_atomic(&count, 13 + (3 + 1) * 19, 100).await;
+                bot.abort();
+            })
+            .await;
     }
 }

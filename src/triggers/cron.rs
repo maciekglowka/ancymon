@@ -1,9 +1,9 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use std::str::FromStr;
+use chrono::{DateTime, Local};
+use std::{collections::BinaryHeap, str::FromStr};
 
 use crate::{
-    errors::{AncymonError, BuildError, ConfigError},
+    errors::{AncymonError, ConfigError},
     events::Event,
     triggers::{Trigger, TriggerSource},
     values::Value,
@@ -11,75 +11,73 @@ use crate::{
 
 #[derive(Default)]
 pub struct CronTrigger {
-    schedules: Vec<cron::Schedule>,
-    triggers: Vec<Trigger>,
-}
-impl CronTrigger {
-    /// Return next scheduled time + trigger indices to fire
-    fn next(&self) -> (DateTime<Utc>, Vec<usize>) {
-        let mut upcoming = self
-            .schedules
-            .iter()
-            .map(|a| a.upcoming(Utc).take(1).next().unwrap())
-            .enumerate()
-            .collect::<Vec<_>>();
-        upcoming.sort_by_key(|a| a.1);
-        let indices = upcoming
-            .iter()
-            .filter(|a| a.1 == upcoming[0].1)
-            .map(|a| a.0)
-            .collect();
-
-        (upcoming[0].1, indices)
-    }
+    entries: BinaryHeap<CronEntry>,
 }
 
 #[async_trait]
 impl TriggerSource for CronTrigger {
-    async fn init(
-        &mut self,
-        config: &toml::Table,
-        triggers: Vec<Trigger>,
-    ) -> Result<(), AncymonError> {
+    async fn init(&mut self, _: &toml::Table, triggers: Vec<Trigger>) -> Result<(), AncymonError> {
         if triggers.is_empty() {
             return Err(ConfigError::MissingValue("No cron triggers specified".to_string()).into());
         }
 
-        // Make sure schedules and triggers are synced.
-        self.schedules.clear();
+        self.entries =
+            triggers
+                .into_iter()
+                .map(|t| {
+                    let pat = t.arguments.as_str().ok_or(ConfigError::InvalidValueType(
+                        "Cron arguments: expected string".to_string(),
+                    ))?;
 
-        for trigger in triggers.iter() {
-            let pat = trigger
-                .arguments
-                .as_str()
-                .ok_or(ConfigError::InvalidValueType(
-                    "Cron arguments: expected string".to_string(),
-                ))?;
-            let schedule = cron::Schedule::from_str(pat).unwrap();
-            self.schedules.push(schedule);
-        }
-
-        self.triggers = triggers;
+                    let schedule = cron::Schedule::from_str(pat).unwrap();
+                    let next = schedule.upcoming(Local).take(1).next().ok_or(
+                        ConfigError::InvalidValue(format!(
+                            "Invalid cron value at {:?}",
+                            t.arguments
+                        )),
+                    )?;
+                    Ok(CronEntry(next, schedule, t))
+                })
+                .collect::<Result<BinaryHeap<CronEntry>, AncymonError>>()?;
 
         Ok(())
     }
     async fn run(&mut self, tx: tokio::sync::mpsc::Sender<Event>) {
-        loop {
-            let (deadline, indices) = self.next();
+        while let Some(entry) = self.entries.pop() {
+            let now = Local::now();
+            if entry.0 > now {
+                tokio::time::sleep((entry.0 - now).to_std().unwrap()).await;
+            }
+            tx.send(Event::new(
+                entry.2.emit.to_string(),
+                Ok(Value::Integer(entry.0.timestamp())),
+            ))
+            .await
+            .unwrap();
 
-            // TODO check precision
-            let duration = deadline - Utc::now();
-            // FIXME might panic if duration equals 0
-            tokio::time::sleep(duration.to_std().unwrap()).await;
-            let value = Value::Integer(deadline.timestamp());
-            for i in indices {
-                tx.send(Event::new(
-                    self.triggers[i].emit.to_string(),
-                    Ok(value.clone()),
-                ))
-                .await
-                .unwrap();
+            if let Some(next) = entry.1.upcoming(Local).take(1).next() {
+                self.entries.push(CronEntry(next, entry.1, entry.2));
             }
         }
     }
 }
+
+struct CronEntry(DateTime<Local>, cron::Schedule, Trigger);
+impl Ord for CronEntry {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Reverse ordering on `next`
+        other.0.cmp(&self.0)
+    }
+}
+impl PartialOrd for CronEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // Use Ord's method
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for CronEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for CronEntry {}

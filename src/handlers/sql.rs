@@ -1,14 +1,13 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use sqlx::{
-    any::{install_default_drivers, AnyArguments, AnyRow, AnyTypeInfoKind},
+    any::{install_default_drivers, AnyArguments, AnyRow, AnyStatement, AnyTypeInfoKind},
     query::Query,
-    Any, AnyConnection, Column, Connection, Row,
+    Any, AnyConnection, Column, Connection, Executor, Row, Statement,
 };
 
 use crate::{
     errors::{AncymonError, BuildError, ConfigError, RuntimeError},
-    events::EventValue,
     handlers::{EventHandler, HandlerBuilder},
     values::Value,
 };
@@ -46,6 +45,40 @@ impl SqlHandler {
             .map_err(|e| RuntimeError::Handler(format!("Sql fetch many failed {e}")))?;
         Ok(rows)
     }
+    fn get_query<'a>(
+        &self,
+        statement: &'a AnyStatement,
+        parameters: &'a Value,
+    ) -> Result<Query<'a, Any, AnyArguments<'a>>, AncymonError> {
+        let mut query = statement.query();
+        let Some(stmt_params) = statement.parameters() else {
+            return Ok(query);
+        };
+
+        let (bind_count, _) = match stmt_params {
+            sqlx::Either::Left(a) => (a.len(), Some(a)),
+            sqlx::Either::Right(i) => (i, None),
+        };
+
+        if bind_count == 0 {
+            return Ok(query);
+        }
+
+        if bind_count == 1 {
+            query = bind_value(query, parameters)?;
+        } else {
+            let arr = parameters
+                .as_array()
+                .ok_or(RuntimeError::InvalidArguments(format!(
+                    "Expected multiple sql parameter bindings, found {parameters:?}"
+                )))?;
+            for param in arr {
+                query = bind_value(query, param)?;
+            }
+        }
+
+        Ok(query)
+    }
 }
 #[async_trait]
 impl EventHandler for SqlHandler {
@@ -57,14 +90,19 @@ impl EventHandler for SqlHandler {
             .map_err(|e| BuildError::Handler(format!("{e}")))?;
         Ok(())
     }
-    async fn execute(&self, event: &Value, arguments: &Value) -> EventValue {
+    async fn execute(&self, event: &Value, arguments: &Value) -> Result<Value, AncymonError> {
         let arguments: SqlArguments = arguments.clone().try_into()?;
 
         let mut connection = AnyConnection::connect(&self.config.connection_string)
             .await
             .map_err(|e| RuntimeError::Handler(format!("Sql connection failed:{e}")))?;
 
-        let query = sqlx::query(&arguments.query).bind(2);
+        let stmt = connection
+            .prepare(&arguments.query)
+            .await
+            .map_err(|e| RuntimeError::Handler(format!("Invalid sql statement: {e}")))?;
+
+        let query = self.get_query(&stmt, event)?;
 
         if arguments.fetch_many {
             let rows = self.fetch_many(&mut connection, query).await?;
@@ -90,8 +128,6 @@ impl HandlerBuilder for SqlBuilder {
 struct SqlArguments {
     query: String,
     fetch_many: bool,
-    bind_one: bool,
-    bind_many: bool,
 }
 impl TryFrom<Value> for SqlArguments {
     type Error = AncymonError;
@@ -116,25 +152,8 @@ impl TryFrom<Value> for SqlArguments {
         } else {
             false
         };
-        let bind_one = if let Some(v) = map.get("bind-one") {
-            v.as_bool()
-                .ok_or(ConfigError::InvalidValueType("Expected bool".to_string()))?
-        } else {
-            false
-        };
-        let bind_many = if let Some(v) = map.get("bind-many") {
-            v.as_bool()
-                .ok_or(ConfigError::InvalidValueType("Expected bool".to_string()))?
-        } else {
-            false
-        };
 
-        Ok(Self {
-            query,
-            fetch_many,
-            bind_one,
-            bind_many,
-        })
+        Ok(Self { query, fetch_many })
     }
 }
 
@@ -186,6 +205,18 @@ fn map_db_value(row: &AnyRow, idx: usize) -> Result<Value, AncymonError> {
         AnyTypeInfoKind::Blob => {
             Err(RuntimeError::InvalidArgumentType("Blobs are not supported".to_string()).into())
         }
+    }
+}
+
+fn bind_value<'a>(
+    query: Query<'a, Any, AnyArguments<'a>>,
+    value: &'a Value,
+) -> Result<Query<'a, Any, AnyArguments<'a>>, AncymonError> {
+    match value {
+        Value::Integer(i) => Ok(query.bind(i)),
+        Value::Float(f) => Ok(query.bind(f)),
+        Value::String(s) => Ok(query.bind(s)),
+        _ => Err(RuntimeError::Handler(format!("Unsupported sql bind for {value:?}")).into()),
     }
 }
 
@@ -245,6 +276,7 @@ mod tests {
             Value::Array(vec![Value::String("temp".to_string()), Value::Integer(7)])
         )
     }
+
     #[tokio::test]
     async fn fetch_one_scalar() {
         let (mut conn, handler) = db("fetch_one_scalar").await;
@@ -277,6 +309,7 @@ mod tests {
             .unwrap();
         assert_eq!(result, Value::Integer(7))
     }
+
     #[tokio::test]
     async fn fetch_many() {
         let (mut conn, handler) = db("fetch_many").await;
@@ -327,6 +360,7 @@ mod tests {
             Value::Array(vec![Value::String("temp".to_string()), Value::Integer(3)])
         );
     }
+
     #[tokio::test]
     async fn fetch_many_scalar() {
         let (mut conn, handler) = db("fetch_many_scalar").await;
@@ -402,5 +436,95 @@ mod tests {
                 Value::Null,
             ])
         )
+    }
+
+    #[tokio::test]
+    async fn fetch_bind_single() {
+        let (mut conn, handler) = db("bind_single").await;
+        sqlx::query("CREATE TABLE sensor ( id text, value integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 3)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 5)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Integer(4),
+                &Value::Map(HashMap::from_iter(vec![
+                    (
+                        "query".to_string(),
+                        Value::String(
+                            "SELECT value FROM sensor WHERE value > ? ORDER BY value DESC;"
+                                .to_string(),
+                        ),
+                    ),
+                    ("fetch-many".to_string(), Value::Bool(true)),
+                ])),
+            )
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(2, arr.len());
+        assert_eq!(arr[0], Value::Integer(7));
+        assert_eq!(arr[1], Value::Integer(5));
+    }
+
+    #[tokio::test]
+    async fn fetch_bind_many() {
+        let (mut conn, handler) = db("bind_many").await;
+        sqlx::query("CREATE TABLE sensor ( id text, value integer );")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 3)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('temp', 5)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO sensor(id, value) VALUES ('hum', 9)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let result = handler
+            .execute(
+                &Value::Array(vec![Value::Integer(4), Value::String("temp".to_string())]),
+                &Value::Map(HashMap::from_iter(vec![
+                    (
+                        "query".to_string(),
+                        Value::String(
+                            "SELECT value FROM sensor WHERE value > ? AND id = ? ORDER BY value DESC;"
+                                .to_string(),
+                        ),
+                    ),
+                    ("fetch-many".to_string(), Value::Bool(true)),
+                ])),
+            )
+            .await
+            .unwrap();
+
+        let arr = result.as_array().unwrap();
+        assert_eq!(2, arr.len());
+        assert_eq!(arr[0], Value::Integer(7));
+        assert_eq!(arr[1], Value::Integer(5));
     }
 }
