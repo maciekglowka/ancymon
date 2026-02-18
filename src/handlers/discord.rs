@@ -1,0 +1,39 @@
+use async_trait::async_trait;
+use serenity::all::Http;
+
+use crate::{
+    errors::{AncymonError, ConfigError},
+    handlers::{EventHandler, HandlerBuilder},
+    values::Value,
+};
+
+/// Sends DM messages to selected user.
+pub struct DiscordDmHandler {
+    http: Http,
+    user_id: u64,
+}
+#[async_trait]
+impl EventHandler for DiscordDmHandler {
+    async fn init(&mut self, config: &toml::Table) -> Result<(), AncymonError> {
+        // self.user_id = config
+        //     .get("user-id")
+        //     .ok_or(ConfigError::MissingValue(format!("")))
+        Ok(())
+    }
+    async fn execute(&self, event: &Value, _arguments: &Value) -> Result<Value, AncymonError> {
+        tracing::debug!("{event:?}");
+        Ok(event.clone())
+    }
+}
+
+// pub struct DiscordDmBuilder {
+//     http: Http,
+// }
+// impl HandlerBuilder for DiscordDmBuilder {
+//     fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>,
+// AncymonError> {         Ok(Box::new(DiscordDmHandler {
+//             http: self.http,
+//             user_id: 0,
+//         }))
+//     }
+// }

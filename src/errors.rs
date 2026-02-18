@@ -11,6 +11,15 @@ impl std::fmt::Display for AncymonError {
         write!(f, "TODO")
     }
 }
+impl std::error::Error for AncymonError {}
+impl serde::de::Error for AncymonError {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: std::fmt::Display,
+    {
+        AncymonError::ConversionError(msg.to_string())
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum ConfigError {
@@ -29,6 +38,8 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
+impl std::error::Error for ConfigError {}
+
 impl From<ConfigError> for AncymonError {
     fn from(value: ConfigError) -> Self {
         Self::ConfigError(value)
@@ -46,6 +57,8 @@ impl std::fmt::Display for BuildError {
         write!(f, "TODO")
     }
 }
+
+impl std::error::Error for BuildError {}
 
 impl From<BuildError> for AncymonError {
     fn from(value: BuildError) -> Self {
@@ -67,6 +80,8 @@ impl std::fmt::Display for RuntimeError {
         write!(f, "TODO")
     }
 }
+
+impl std::error::Error for RuntimeError {}
 
 impl From<RuntimeError> for AncymonError {
     fn from(value: RuntimeError) -> Self {

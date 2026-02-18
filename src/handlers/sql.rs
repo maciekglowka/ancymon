@@ -125,36 +125,10 @@ impl HandlerBuilder for SqlBuilder {
     }
 }
 
+#[derive(Deserialize)]
 struct SqlArguments {
     query: String,
     fetch_many: bool,
-}
-impl TryFrom<Value> for SqlArguments {
-    type Error = AncymonError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let map = value
-            .as_map()
-            .ok_or(ConfigError::InvalidValueType("Expected map".to_string()))?;
-
-        let query = map
-            .get("query")
-            .ok_or(ConfigError::MissingValue(
-                "Field `query` is required".to_string(),
-            ))?
-            .as_str()
-            .ok_or(ConfigError::InvalidValueType("Expected string".to_string()))?
-            .to_string();
-
-        let fetch_many = if let Some(v) = map.get("fetch-many") {
-            v.as_bool()
-                .ok_or(ConfigError::InvalidValueType("Expected bool".to_string()))?
-        } else {
-            false
-        };
-
-        Ok(Self { query, fetch_many })
-    }
 }
 
 fn map_row(row: &AnyRow) -> Result<Value, AncymonError> {

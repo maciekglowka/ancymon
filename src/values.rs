@@ -1,5 +1,7 @@
-use serde::{de, Deserialize};
+use serde::{de, forward_to_deserialize_any, Deserialize, Deserializer};
 use std::collections::HashMap;
+
+use crate::errors::AncymonError;
 
 #[derive(Clone, Default, Debug, PartialEq)]
 pub enum Value {
@@ -51,6 +53,9 @@ impl Value {
             return Some(m);
         }
         None
+    }
+    pub fn try_into<'de, T: Deserialize<'de>>(self) -> Result<T, AncymonError> {
+        Deserialize::deserialize(self)
     }
     pub fn pretty(&self) -> String {
         self.pretty_nested(0, true)
@@ -177,6 +182,96 @@ impl<'de> Deserialize<'de> for Value {
     }
 }
 
+struct ArrayDeserializer {
+    inner: std::vec::IntoIter<Value>,
+}
+impl ArrayDeserializer {
+    fn new(v: Vec<Value>) -> Self {
+        Self {
+            inner: v.into_iter(),
+        }
+    }
+}
+impl<'de> serde::de::SeqAccess<'de> for ArrayDeserializer {
+    type Error = AncymonError;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: de::DeserializeSeed<'de>,
+    {
+        match self.inner.next() {
+            Some(v) => Ok(seed.deserialize(v).map(Some)?),
+            None => Ok(None),
+        }
+    }
+}
+
+struct MapDeserializer {
+    inner: std::collections::hash_map::IntoIter<String, Value>,
+    val: Option<Value>,
+}
+impl MapDeserializer {
+    fn new(v: HashMap<String, Value>) -> Self {
+        Self {
+            inner: v.into_iter(),
+            val: None,
+        }
+    }
+}
+impl<'de> serde::de::MapAccess<'de> for MapDeserializer {
+    type Error = AncymonError;
+
+    fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
+    where
+        K: de::DeserializeSeed<'de>,
+    {
+        match self.inner.next() {
+            Some((k, v)) => {
+                self.val = Some(v);
+                Ok(seed.deserialize(Value::String(k)).map(Some)?)
+            }
+            None => Ok(None),
+        }
+    }
+    fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::DeserializeSeed<'de>,
+    {
+        match self.val.take() {
+            Some(v) => Ok(seed.deserialize(v)?),
+            None => Err(AncymonError::ConversionError(
+                "Value::Map deserialization has failed".to_string(),
+            )
+            .into()),
+        }
+    }
+}
+
+impl<'de> Deserializer<'de> for Value {
+    type Error = AncymonError;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de>,
+    {
+        match self {
+            Value::Null => visitor.visit_none(),
+            Value::Bool(b) => visitor.visit_bool(b),
+            Value::Integer(i) => visitor.visit_i64(i),
+            Value::Float(f) => visitor.visit_f64(f),
+            Value::String(s) => visitor.visit_str(&s),
+            Value::Array(a) => visitor.visit_seq(ArrayDeserializer::new(a)),
+            Value::Map(m) => visitor.visit_map(MapDeserializer::new(m)),
+        }
+    }
+
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +348,21 @@ mod tests {
                 Value::String("hello".to_string())
             )]))
         )
+    }
+    #[test]
+    fn into_struct() {
+        #[derive(Deserialize)]
+        struct St {
+            a: usize,
+            b: String,
+        }
+
+        let map = Value::Map(HashMap::from_iter(vec![
+            ("a".to_string(), Value::Integer(4)),
+            ("b".to_string(), Value::String("four".to_string())),
+        ]));
+        let st: St = map.try_into().unwrap();
+        assert_eq!(4, st.a);
+        assert_eq!("four".to_string(), st.b);
     }
 }

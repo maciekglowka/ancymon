@@ -4,6 +4,7 @@ mod config;
 pub mod errors;
 mod events;
 pub mod handlers;
+pub mod shared;
 pub mod triggers;
 pub mod values;
 
