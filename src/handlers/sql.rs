@@ -128,6 +128,8 @@ impl HandlerBuilder for SqlBuilder {
 #[derive(Deserialize)]
 struct SqlArguments {
     query: String,
+    #[serde(default)]
+    #[serde(rename = "fetch-many")]
     fetch_many: bool,
 }
 
