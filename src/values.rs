@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use crate::errors::AncymonError;
 
+/// Basic value type for Ancymon events.
 #[derive(Clone, Default, Debug, PartialEq)]
 pub enum Value {
     #[default]
@@ -241,8 +242,7 @@ impl<'de> serde::de::MapAccess<'de> for MapDeserializer {
             Some(v) => Ok(seed.deserialize(v)?),
             None => Err(AncymonError::ConversionError(
                 "Value::Map deserialization has failed".to_string(),
-            )
-            .into()),
+            )),
         }
     }
 }
@@ -265,9 +265,19 @@ impl<'de> Deserializer<'de> for Value {
         }
     }
 
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: de::Visitor<'de>,
+    {
+        match self {
+            Value::Null => visitor.visit_none(),
+            _ => visitor.visit_some(self),
+        }
+    }
+
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        bytes byte_buf unit unit_struct newtype_struct seq tuple
         tuple_struct map struct enum identifier ignored_any
     }
 }
@@ -355,14 +365,31 @@ mod tests {
         struct St {
             a: usize,
             b: String,
+            c: Vec<Option<bool>>,
+            d: HashMap<String, u8>,
         }
 
         let map = Value::Map(HashMap::from_iter(vec![
             ("a".to_string(), Value::Integer(4)),
             ("b".to_string(), Value::String("four".to_string())),
+            (
+                "c".to_string(),
+                Value::Array(vec![Value::Bool(true), Value::Null]),
+            ),
+            (
+                "d".to_string(),
+                Value::Map(HashMap::from_iter(vec![
+                    ("2".to_string(), Value::Integer(2)),
+                    ("3".to_string(), Value::Integer(3)),
+                ])),
+            ),
         ]));
         let st: St = map.try_into().unwrap();
         assert_eq!(4, st.a);
         assert_eq!("four".to_string(), st.b);
+        assert_eq!(Some(true), st.c[0]);
+        assert_eq!(None, st.c[1]);
+        assert_eq!(2, st.d["2"]);
+        assert_eq!(3, st.d["3"]);
     }
 }

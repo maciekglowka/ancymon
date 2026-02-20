@@ -1,12 +1,12 @@
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
-use toml::Table;
 
 use crate::{
     actions::Action,
     errors::{AncymonError, ConfigError},
     triggers::Trigger,
+    values::Value,
 };
 
 const ENV_REGEX_STR: &str = r#"\$\{([[:word:]]+)\}"#;
@@ -15,8 +15,8 @@ static ENV_REGEX: std::sync::LazyLock<Regex> =
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
-    pub(crate) sources: HashMap<String, Table>,
-    pub(crate) handlers: HashMap<String, Table>,
+    pub(crate) sources: HashMap<String, Value>,
+    pub(crate) handlers: HashMap<String, Value>,
     pub(crate) actions: Vec<Action>,
     pub(crate) triggers: Vec<Trigger>,
 }
@@ -176,9 +176,11 @@ mod tests {
 
         assert_eq!(
             config.handlers["msg"]
+                .as_map()
+                .unwrap()
                 .get("arguments")
                 .unwrap()
-                .as_table()
+                .as_map()
                 .unwrap()
                 .get("secret")
                 .unwrap()
@@ -188,9 +190,11 @@ mod tests {
         );
         assert_eq!(
             config.handlers["msg"]
+                .as_map()
+                .unwrap()
                 .get("arguments")
                 .unwrap()
-                .as_table()
+                .as_map()
                 .unwrap()
                 .get("id")
                 .unwrap()

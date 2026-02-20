@@ -7,18 +7,18 @@ use sqlx::{
 };
 
 use crate::{
-    errors::{AncymonError, BuildError, ConfigError, RuntimeError},
-    handlers::{EventHandler, HandlerBuilder},
+    errors::{AncymonError, BuildError, RuntimeError},
+    handlers::EventHandler,
     values::Value,
 };
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 struct SqlConfig {
     #[serde(rename = "connection-string")]
     connection_string: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct SqlHandler {
     config: SqlConfig,
 }
@@ -82,7 +82,7 @@ impl SqlHandler {
 }
 #[async_trait]
 impl EventHandler for SqlHandler {
-    async fn init(&mut self, config: &toml::Table) -> Result<(), AncymonError> {
+    async fn init(&mut self, config: &Value) -> Result<(), AncymonError> {
         install_default_drivers();
         self.config = config
             .clone()
@@ -115,13 +115,6 @@ impl EventHandler for SqlHandler {
             let row = self.fetch_one(&mut connection, query).await?;
             map_row(&row)
         }
-    }
-}
-
-pub struct SqlBuilder;
-impl HandlerBuilder for SqlBuilder {
-    fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
-        Ok(Box::new(SqlHandler::default()))
     }
 }
 
@@ -204,8 +197,11 @@ mod tests {
 
     async fn db(name: &str) -> (AnyConnection, SqlHandler) {
         let connection_str = format!("sqlite:file:{name}?mode=memory&cache=shared");
-        let config =
-            toml::Table::from_str(&format!("connection-string = \"{connection_str}\"")).unwrap();
+
+        let config = Value::Map(HashMap::from_iter(vec![(
+            "connection-string".to_string(),
+            Value::String(connection_str.clone()),
+        )]));
 
         let mut handler = SqlHandler::default();
         handler.init(&config).await.unwrap();

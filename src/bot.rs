@@ -77,6 +77,10 @@ impl Bot {
 
         for (name, handler_config) in config.handlers.iter() {
             let builder = handler_config
+                .as_map()
+                .ok_or(ConfigError::InvalidValueType(format!(
+                    "Expected map as handler config. Found: {handler_config:?}"
+                )))?
                 .get("type")
                 .ok_or(ConfigError::MissingValue(format!(
                     "Key not found: `type` at handler config {name}"

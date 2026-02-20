@@ -16,7 +16,7 @@ pub struct CronTrigger {
 
 #[async_trait]
 impl TriggerSource for CronTrigger {
-    async fn init(&mut self, _: &toml::Table, triggers: Vec<Trigger>) -> Result<(), AncymonError> {
+    async fn init(&mut self, _: &Value, triggers: Vec<Trigger>) -> Result<(), AncymonError> {
         if triggers.is_empty() {
             return Err(ConfigError::MissingValue("No cron triggers specified".to_string()).into());
         }

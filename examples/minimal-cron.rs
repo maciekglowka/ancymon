@@ -1,4 +1,4 @@
-use ancymon::{handlers::DebugBuilder, triggers::cron::CronTrigger, Bot, Config, Value};
+use ancymon::{handlers::DebugHandler, triggers::cron::CronTrigger, Bot, Config, Value};
 use std::fs;
 
 #[tokio::main]
@@ -11,7 +11,7 @@ async fn main() {
     let config = Config::new(&config_str).unwrap();
 
     Bot::default()
-        .with_handler_type("debug", DebugBuilder)
+        .with_handler_type("debug", DebugHandler)
         .with_source_type("cron", CronTrigger::default())
         .run(config)
         .await

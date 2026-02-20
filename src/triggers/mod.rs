@@ -17,11 +17,7 @@ pub struct Trigger {
 
 #[async_trait]
 pub trait TriggerSource {
-    async fn init(
-        &mut self,
-        config: &toml::Table,
-        triggers: Vec<Trigger>,
-    ) -> Result<(), AncymonError>;
+    async fn init(&mut self, config: &Value, triggers: Vec<Trigger>) -> Result<(), AncymonError>;
     async fn run(&mut self, tx: tokio::sync::mpsc::Sender<Event>);
 }
 
@@ -29,7 +25,7 @@ pub trait TriggerSource {
 pub struct StartupTrigger(Vec<Trigger>);
 #[async_trait]
 impl TriggerSource for StartupTrigger {
-    async fn init(&mut self, _: &toml::Table, triggers: Vec<Trigger>) -> Result<(), AncymonError> {
+    async fn init(&mut self, _: &Value, triggers: Vec<Trigger>) -> Result<(), AncymonError> {
         self.0 = triggers;
         Ok(())
     }

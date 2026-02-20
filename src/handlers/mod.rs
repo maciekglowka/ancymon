@@ -8,27 +8,29 @@ pub mod sql;
 pub trait HandlerBuilder {
     fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError>;
 }
+impl<T> HandlerBuilder for T
+where
+    T: EventHandler + Clone + Send + Sync + 'static,
+{
+    fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
+        Ok(Box::new(self.clone()))
+    }
+}
 
 #[async_trait]
 pub trait EventHandler {
-    async fn init(&mut self, config: &toml::Table) -> Result<(), AncymonError> {
+    async fn init(&mut self, config: &Value) -> Result<(), AncymonError> {
         Ok(())
     }
     async fn execute(&self, event: &Value, arguments: &Value) -> Result<Value, AncymonError>;
 }
 
+#[derive(Clone)]
 pub struct DebugHandler;
 #[async_trait]
 impl EventHandler for DebugHandler {
     async fn execute(&self, event: &Value, _arguments: &Value) -> Result<Value, AncymonError> {
         tracing::debug!("{event:?}");
         Ok(event.clone())
-    }
-}
-
-pub struct DebugBuilder;
-impl HandlerBuilder for DebugBuilder {
-    fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
-        Ok(Box::new(DebugHandler))
     }
 }

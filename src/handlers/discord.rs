@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use serenity::all::Http;
 
 use crate::{
-    errors::{AncymonError, ConfigError},
+    errors::AncymonError,
     handlers::{EventHandler, HandlerBuilder},
+    shared::discord::get_http,
     values::Value,
 };
 
@@ -14,7 +15,7 @@ pub struct DiscordDmHandler {
 }
 #[async_trait]
 impl EventHandler for DiscordDmHandler {
-    async fn init(&mut self, config: &toml::Table) -> Result<(), AncymonError> {
+    async fn init(&mut self, config: &Value) -> Result<(), AncymonError> {
         // self.user_id = config
         //     .get("user-id")
         //     .ok_or(ConfigError::MissingValue(format!("")))
@@ -26,14 +27,12 @@ impl EventHandler for DiscordDmHandler {
     }
 }
 
-// pub struct DiscordDmBuilder {
-//     http: Http,
-// }
-// impl HandlerBuilder for DiscordDmBuilder {
-//     fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>,
-// AncymonError> {         Ok(Box::new(DiscordDmHandler {
-//             http: self.http,
-//             user_id: 0,
-//         }))
-//     }
-// }
+pub struct DiscordDmBuilder;
+impl HandlerBuilder for DiscordDmBuilder {
+    fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
+        Ok(Box::new(DiscordDmHandler {
+            http: get_http()?,
+            user_id: 0,
+        }))
+    }
+}

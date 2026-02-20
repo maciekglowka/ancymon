@@ -1,5 +1,5 @@
 use ancymon::{
-    handlers::{sql::SqlBuilder, DebugBuilder},
+    handlers::{sql::SqlHandler, DebugHandler},
     triggers::cron::CronTrigger,
     Bot, Config,
 };
@@ -15,8 +15,8 @@ async fn main() {
     let config = Config::new(&config_str).unwrap();
 
     Bot::default()
-        .with_handler_type("sql", SqlBuilder)
-        .with_handler_type("debug", DebugBuilder)
+        .with_handler_type("sql", SqlHandler::default())
+        .with_handler_type("debug", DebugHandler)
         .with_source_type("cron", CronTrigger::default())
         .run(config)
         .await
