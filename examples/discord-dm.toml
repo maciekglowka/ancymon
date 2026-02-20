@@ -1,0 +1,17 @@
+[sources.startup]
+type = "startup"
+
+[handlers.discord-dm]
+type = "discord-dm"
+user-id = "${DISCORD_USER_ID}"
+
+[[triggers]]
+source = "startup"
+emit = "startup-trigger"
+
+[[actions]]
+handler = "discord-dm"
+event = "startup-trigger"
+emit = "discord-hello"
+arguments.message = "Ancymon says hello!"
+
