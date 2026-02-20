@@ -23,7 +23,7 @@ pub fn pack_error(value: Value, error: AncymonError) -> Value {
 /// Unpack event error value
 ///
 /// If successful returns (original_value, error_message_str)
-pub fn unpack_error<'a>(value: &'a Value) -> Option<(&'a Value, &'a Value)> {
+pub fn unpack_error(value: &Value) -> Option<(&Value, &Value)> {
     let map = value.as_map()?;
     Some((map.get("value")?, map.get("error")?))
 }

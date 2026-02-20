@@ -1,0 +1,18 @@
+[sources.discord-command]
+type = "discord-command"
+bot-token = "${DISCORD_TOKEN}"
+
+[[triggers]]
+source = "discord-command"
+emit = "command-trigger"
+arguments = "!debug"
+
+[handlers.debug]
+type = "debug"
+
+[[actions]]
+handler = "debug"
+event = "command-trigger"
+emit = "command-debug"
+arguments = []
+

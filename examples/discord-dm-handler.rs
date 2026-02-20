@@ -7,7 +7,7 @@ async fn main() {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    let config_str = fs::read_to_string("examples/discord-dm.toml").unwrap();
+    let config_str = fs::read_to_string("examples/discord-dm-handler.toml").unwrap();
     let config = Config::new(&config_str).unwrap();
 
     Bot::default()

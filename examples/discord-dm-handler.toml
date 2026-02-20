@@ -4,6 +4,7 @@ type = "startup"
 [handlers.discord-dm]
 type = "discord-dm"
 user-id = "${DISCORD_USER_ID}"
+bot-token = "${DISCORD_TOKEN}"
 
 [[triggers]]
 source = "startup"
@@ -14,4 +15,3 @@ handler = "discord-dm"
 event = "startup-trigger"
 emit = "discord-hello"
 arguments.message = "Ancymon says hello!"
-
