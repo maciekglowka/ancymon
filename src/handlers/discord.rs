@@ -4,6 +4,7 @@ use serenity::all::{CreateMessage, Http, PrivateChannel, UserId};
 
 use crate::{
     errors::{AncymonError, BuildError, ConfigError, RuntimeError},
+    events::EventMeta,
     handlers::{EventHandler, HandlerBuilder},
     values::Value,
 };
@@ -32,7 +33,12 @@ impl EventHandler for DiscordDmHandler {
             })?;
         Ok(())
     }
-    async fn execute(&self, event: &Value, arguments: &Value) -> Result<Value, AncymonError> {
+    async fn execute(
+        &self,
+        event: &Value,
+        arguments: &Value,
+        _: &mut EventMeta,
+    ) -> Result<Value, AncymonError> {
         let arguments: DiscordDmArguments = arguments.clone().try_into()?;
         let mut content = arguments.message.to_string();
         if arguments.include_event {

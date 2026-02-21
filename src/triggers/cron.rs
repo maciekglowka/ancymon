@@ -48,7 +48,7 @@ impl TriggerSource for CronTrigger {
             if entry.0 > now {
                 tokio::time::sleep((entry.0 - now).to_std().unwrap()).await;
             }
-            tx.send(Event::new(
+            tx.send(Event::initial(
                 entry.2.emit.to_string(),
                 Ok(Value::Integer(entry.0.timestamp())),
             ))

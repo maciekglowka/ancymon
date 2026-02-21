@@ -32,9 +32,12 @@ impl TriggerSource for StartupTrigger {
     async fn run(&mut self, tx: tokio::sync::mpsc::Sender<Event>) {
         let ts = Utc::now().timestamp();
         for trigger in self.0.iter() {
-            tx.send(Event::new(trigger.emit.to_string(), Ok(Value::Integer(ts))))
-                .await
-                .unwrap();
+            tx.send(Event::initial(
+                trigger.emit.to_string(),
+                Ok(Value::Integer(ts)),
+            ))
+            .await
+            .unwrap();
         }
     }
 }

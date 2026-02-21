@@ -8,6 +8,7 @@ use sqlx::{
 
 use crate::{
     errors::{AncymonError, BuildError, RuntimeError},
+    events::EventMeta,
     handlers::EventHandler,
     values::Value,
 };
@@ -90,7 +91,12 @@ impl EventHandler for SqlHandler {
             .map_err(|e| BuildError::Handler(format!("{e}")))?;
         Ok(())
     }
-    async fn execute(&self, event: &Value, arguments: &Value) -> Result<Value, AncymonError> {
+    async fn execute(
+        &self,
+        event: &Value,
+        arguments: &Value,
+        _: &mut EventMeta,
+    ) -> Result<Value, AncymonError> {
         let arguments: SqlArguments = arguments.clone().try_into()?;
 
         let mut connection = AnyConnection::connect(&self.config.connection_string)
@@ -240,6 +246,7 @@ mod tests {
                     "query".to_string(),
                     Value::String("SELECT id, value FROM sensor ORDER BY value DESC;".to_string()),
                 )])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();
@@ -276,6 +283,7 @@ mod tests {
                     "query".to_string(),
                     Value::String("SELECT value FROM sensor ORDER BY value;".to_string()),
                 )])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();
@@ -314,6 +322,7 @@ mod tests {
                     ),
                     ("fetch-many".to_string(), Value::Bool(true)),
                 ])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();
@@ -363,6 +372,7 @@ mod tests {
                     ),
                     ("fetch-many".to_string(), Value::Bool(true)),
                 ])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();
@@ -395,6 +405,7 @@ mod tests {
                     "query".to_string(),
                     Value::String("SELECT id, ts, value, extra FROM sensor;".to_string()),
                 )])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();
@@ -443,6 +454,7 @@ mod tests {
                     ),
                     ("fetch-many".to_string(), Value::Bool(true)),
                 ])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();
@@ -490,6 +502,7 @@ mod tests {
                     ),
                     ("fetch-many".to_string(), Value::Bool(true)),
                 ])),
+                &mut EventMeta::dummy(),
             )
             .await
             .unwrap();

@@ -199,7 +199,7 @@ async fn execute_event(event: Event, context: Arc<BotContext>) {
     }
 }
 
-async fn execute_single(event: Event, action_idx: usize, context: &Arc<BotContext>) {
+async fn execute_single(mut event: Event, action_idx: usize, context: &Arc<BotContext>) {
     let Some(actions) = context.actions.get(&event.name) else {
         // Should never actually happen.
         return;
@@ -218,7 +218,10 @@ async fn execute_single(event: Event, action_idx: usize, context: &Arc<BotContex
     let mut retries = action.max_retries;
 
     loop {
-        let result = match handler.execute(value, &action.arguments).await {
+        let result = match handler
+            .execute(value, &action.arguments, &mut event.meta)
+            .await
+        {
             Ok(a) => Ok(a),
             Err(e) => {
                 tracing::error!(
@@ -232,7 +235,11 @@ async fn execute_single(event: Event, action_idx: usize, context: &Arc<BotContex
         let retry = result.is_err() && retries > 0;
         context
             .tx
-            .send(Event::new(action.emit.to_string(), result))
+            .send(Event::with_meta(
+                action.emit.to_string(),
+                result,
+                event.meta.clone(),
+            ))
             .await
             .unwrap();
 
@@ -250,14 +257,19 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use crate::triggers::StartupTrigger;
+    use crate::{events::EventMeta, triggers::StartupTrigger};
 
     use super::*;
 
     struct CounterHandler(Arc<AtomicU64>);
     #[async_trait]
     impl EventHandler for CounterHandler {
-        async fn execute(&self, _: &Value, arguments: &Value) -> Result<Value, AncymonError> {
+        async fn execute(
+            &self,
+            _: &Value,
+            arguments: &Value,
+            _: &mut EventMeta,
+        ) -> Result<Value, AncymonError> {
             let a = arguments.as_int().ok_or(ConfigError::InvalidValue(format!(
                 "Invalid arguments {arguments:?}"
             )))? as u64;

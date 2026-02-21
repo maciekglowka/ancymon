@@ -58,9 +58,12 @@ impl TriggerSource for DiscordCommandTrigger {
     }
     async fn run(&mut self, tx: tokio::sync::mpsc::Sender<Event>) {
         while let Some(command) = self.cmd_rx.as_mut().unwrap().recv().await {
-            tx.send(Event::new(command.emit, Ok(command.content)))
-                .await
-                .unwrap();
+            let mut event = Event::initial(command.emit, Ok(command.content));
+            event.meta.insert(
+                "discord_original_user_id".to_string(),
+                Value::String(command.user_id),
+            );
+            tx.send(event).await.unwrap();
         }
     }
 }
@@ -68,6 +71,8 @@ impl TriggerSource for DiscordCommandTrigger {
 struct Command {
     emit: String,
     content: Value,
+    // String is used as u64 might overflow Value's i64
+    user_id: String,
 }
 
 struct CommandEntry {
@@ -100,6 +105,7 @@ impl DiscordHandler for CommandHandler {
                 .send(Command {
                     emit: entry.emit.to_string(),
                     content: Value::String(tail.to_string()),
+                    user_id: msg.author.id.to_string(),
                 })
                 .await
                 .unwrap();
