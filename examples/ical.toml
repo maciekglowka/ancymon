@@ -1,0 +1,17 @@
+[sources.startup]
+type = "startup"
+
+[handlers.ical]
+type = "ical"
+url = "${CALENDAR_URL}"
+
+[[triggers]]
+source = "startup"
+emit = "startup-trigger"
+
+[[actions]]
+handler = "ical"
+event = "startup-trigger"
+emit = ""
+arguments.start-offset-hours = 18
+arguments.range-hours = 168

@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use crate::{errors::AncymonError, events::EventMeta, values::Value};
 
 pub mod discord;
+pub mod ical;
 pub mod sql;
 
 pub trait HandlerBuilder {

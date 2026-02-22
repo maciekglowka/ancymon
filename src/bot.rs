@@ -224,10 +224,14 @@ async fn execute_single(mut event: Event, action_idx: usize, context: &Arc<BotCo
         {
             Ok(a) => Ok(a),
             Err(e) => {
-                tracing::error!(
-                    "Action execution failed: {e}. Retrying in {}s",
-                    action.retry_delay
-                );
+                if retries > 0 {
+                    tracing::error!(
+                        "Action execution failed: {e}. Retrying in {}s",
+                        action.retry_delay
+                    );
+                } else {
+                    tracing::error!("Action execution failed: {e}.",);
+                }
                 Err(pack_error(value.clone(), e))
             }
         };

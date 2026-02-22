@@ -8,7 +8,12 @@ pub enum AncymonError {
 
 impl std::fmt::Display for AncymonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TODO")
+        match self {
+            Self::BuildError(e) => write!(f, "{e}"),
+            Self::ConfigError(e) => write!(f, "{e}"),
+            Self::RuntimeError(e) => write!(f, "{e}"),
+            Self::ConversionError(e) => write!(f, "{e}"),
+        }
     }
 }
 impl std::error::Error for AncymonError {}
@@ -77,7 +82,13 @@ pub enum RuntimeError {
 
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TODO")
+        match self {
+            Self::InvalidArguments(s) => write!(f, "Invalid arguments: {s}"),
+            Self::InvalidArgumentType(s) => write!(f, "Invalid argument type: {s}"),
+            Self::Bot(s) => write!(f, "Bot error: {s}"),
+            Self::Handler(s) => write!(f, "Handler error: {s}"),
+            Self::Source(s) => write!(f, "Source error: {s}"),
+        }
     }
 }
 

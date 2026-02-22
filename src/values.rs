@@ -72,7 +72,13 @@ impl Value {
             // FIXME double format!
             Self::Integer(i) => pad(&format!("{i}")),
             Self::Float(f) => pad(&format!("{f}")),
-            Self::String(s) => pad(&format!("\"{s}\"")),
+            Self::String(s) => {
+                if level == 0 {
+                    s.to_string()
+                } else {
+                    pad(&format!("\"{s}\""))
+                }
+            }
             Self::Array(a) => {
                 if a.is_empty() {
                     pad("[]")
