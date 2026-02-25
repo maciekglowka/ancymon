@@ -1,0 +1,30 @@
+[sources.startup]
+type = "startup"
+
+[handlers.ical]
+type = "ical"
+url = "${CALENDAR_URL}"
+
+[handlers.discord-dm]
+type = "discord-dm"
+user-id = "${DISCORD_USER_ID}"
+bot-token = "${DISCORD_TOKEN}"
+
+[[triggers]]
+source = "startup"
+emit = "startup-trigger"
+
+[[actions]]
+handler = "ical"
+event = "startup-trigger"
+emit = "startup-cal"
+arguments.start-offset-hours = 4
+arguments.range-hours = 24
+arguments.text-output = true
+
+[[actions]]
+handler = "discord-dm"
+event = "startup-cal"
+emit = "discord-cal"
+arguments.message = "# Upcoming events"
+arguments.include-event = true

@@ -10,9 +10,29 @@ use crate::{
 };
 
 /// Sends DM messages to selected user.
+///
+/// The base message content comes from `arguments.message` field in the config.
+/// If `arguments.include-event` field is set to true, the contents of the
+/// triggering event is also included as a subsequent message(s).
+/// If the event value is of a string type, it will be send as it is.
+/// If the event value is an array, it will be send as a series of messages.
+/// Otherwise the value will be sent pretty printed.
 pub struct DiscordDmHandler {
     http: Option<Http>,
     channel: PrivateChannel,
+}
+impl DiscordDmHandler {
+    async fn send_single(&self, content: &str) -> Result<(), AncymonError> {
+        let _ = self
+            .channel
+            .send_message(
+                self.http.as_ref().unwrap(),
+                CreateMessage::new().content(content),
+            )
+            .await
+            .map_err(|e| RuntimeError::Handler(format!("Discord DM sending failed: {e}")))?;
+        Ok(())
+    }
 }
 #[async_trait]
 impl EventHandler for DiscordDmHandler {
@@ -40,20 +60,31 @@ impl EventHandler for DiscordDmHandler {
         _: &mut EventMeta,
     ) -> Result<Value, AncymonError> {
         let arguments: DiscordDmArguments = arguments.clone().try_into()?;
-        let mut content = arguments.message.to_string();
-        if arguments.include_event {
-            content += "\n";
-            content += &event.pretty();
+
+        self.send_single(&arguments.message).await?;
+
+        if !arguments.include_event {
+            return Ok(Value::String(arguments.message.to_string()));
         }
-        let msg = self
-            .channel
-            .send_message(
-                self.http.as_ref().unwrap(),
-                CreateMessage::new().content(content),
-            )
-            .await
-            .map_err(|e| RuntimeError::Handler(format!("Discord DM sending failed: {e}")))?;
-        Ok(Value::String(msg.content))
+
+        // Handle sending event content.
+
+        let mut sent_content = vec![Value::String(arguments.message.to_string())];
+
+        match event {
+            Value::Array(a) => {
+                for entry in a.iter() {
+                    self.send_single(&entry.pretty()).await?;
+                    sent_content.push(Value::String(entry.pretty()));
+                }
+            }
+            _ => {
+                self.send_single(&event.pretty()).await?;
+                sent_content.push(Value::String(event.pretty()));
+            }
+        }
+
+        Ok(Value::Array(sent_content))
     }
 }
 

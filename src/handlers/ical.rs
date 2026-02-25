@@ -1,12 +1,12 @@
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use async_trait::async_trait;
-use chrono::{Date, DateTime, Datelike, Local, NaiveDate, TimeDelta, Timelike};
+use chrono::{DateTime, Local, TimeDelta};
 use icalendar::{Calendar, Component, DatePerhapsTime};
 use serde::Deserialize;
 
 use crate::{
-    errors::{AncymonError, ConfigError, RuntimeError},
+    errors::{AncymonError, RuntimeError},
     events::EventMeta,
     handlers::EventHandler,
     values::Value,
@@ -23,7 +23,7 @@ impl ICalHandler {
             .map_err(|e| RuntimeError::Handler(format!("Can't fetch the calendar: {e}")))?
             .text()
             .await
-            .map_err(|e| RuntimeError::Handler(format!("Can't the calendar response: {e}")))?;
+            .map_err(|e| RuntimeError::Handler(format!("Can't read calendar response: {e}")))?;
         body.parse()
             .map_err(|e| RuntimeError::Handler(format!("Calendar parsing failed: {e}")).into())
     }
@@ -45,6 +45,7 @@ impl EventHandler for ICalHandler {
         _: &mut EventMeta,
     ) -> Result<Value, AncymonError> {
         let arguments: ICalArguments = arguments.clone().try_into()?;
+
         let ts = event
             .as_int()
             .ok_or(RuntimeError::InvalidArgumentType(format!(
@@ -64,13 +65,18 @@ impl EventHandler for ICalHandler {
             .flat_map(|ev| {
                 get_in_range(ev, &start, &end)
                     .into_iter()
-                    .map(|(s, e)| (s, e, ev.get_url(), ev.get_summary()))
+                    .map(|(s, e)| map_event(ev, &s, &e))
+            })
+            .map(|e| {
+                if arguments.text_output {
+                    Value::String(format_text(&e))
+                } else {
+                    e
+                }
             })
             .collect::<Vec<_>>();
 
-        tracing::info!({ "{events:?}" });
-
-        Ok(Value::Null)
+        Ok(Value::Array(events))
     }
 }
 
@@ -80,6 +86,9 @@ struct ICalArguments {
     start_offset_hours: i64,
     #[serde(rename = "range-hours")]
     range_hours: i64,
+    #[serde(default)]
+    #[serde(rename = "text-output")]
+    text_output: bool,
 }
 
 #[derive(Deserialize)]
@@ -87,16 +96,21 @@ struct ICalConfig {
     url: String,
 }
 
+/// Find event dates in a range given.
+///
+/// For a single event it simply returns a 1-element vec,
+/// if the event is within the range or an empty vec otherwise.
+/// For reccurring events a list of all matching dates is returned.
 fn get_in_range(
     event: &icalendar::Event,
     start: &DateTime<Local>,
     end: &DateTime<Local>,
 ) -> Vec<(DateTime<Local>, DateTime<Local>)> {
     if let Some(rule) = event.property_value("RRULE") {
-        let Some(s) = event.get_start().map(map_date).flatten() else {
+        let Some(s) = event.get_start().and_then(map_date) else {
             return vec![];
         };
-        let Some(e) = event.get_end().map(map_date).flatten() else {
+        let Some(e) = event.get_end().and_then(map_date) else {
             return vec![];
         };
         let dt_start = s.with_timezone(&rrule::Tz::Local(Local));
@@ -119,8 +133,8 @@ fn get_in_range(
             })
             .collect::<Vec<_>>()
     } else {
-        let ev_start = event.get_start().map(map_date).flatten();
-        let ev_end = event.get_end().map(map_date).flatten();
+        let ev_start = event.get_start().and_then(map_date);
+        let ev_end = event.get_end().and_then(map_date);
         match (ev_start, ev_end) {
             (Some(s), Some(e)) => {
                 if s < *end && (s >= *start || e > *start) {
@@ -143,4 +157,62 @@ fn map_date(cal_date: DatePerhapsTime) -> Option<DateTime<Local>> {
             .and_local_timezone(Local)
             .single(),
     }
+}
+
+fn map_event(event: &icalendar::Event, start: &DateTime<Local>, end: &DateTime<Local>) -> Value {
+    let mut map = HashMap::new();
+    map.insert("start".to_string(), Value::Integer(start.timestamp()));
+    map.insert("end".to_string(), Value::Integer(end.timestamp()));
+
+    if let Some(summary) = event.get_summary() {
+        map.insert("summary".to_string(), Value::String(summary.to_string()));
+    }
+    if let Some(description) = event.get_description() {
+        map.insert(
+            "description".to_string(),
+            Value::String(description.to_string()),
+        );
+    }
+
+    Value::Map(map)
+}
+
+fn ts_to_local_str(ts: i64) -> String {
+    let Some(utc) = DateTime::<chrono::Utc>::from_timestamp_secs(ts) else {
+        return String::new();
+    };
+    utc.with_timezone(&Local).to_string()
+}
+
+fn format_text(event: &Value) -> String {
+    let mut text = String::new();
+
+    let Some(map) = event.as_map() else {
+        // Should never happen so we do not return Option<_>.
+        return String::new();
+    };
+    if let Some(Value::String(summary)) = map.get("summary") {
+        text += &format!("## {summary}\n");
+    } else {
+        text += "## <Unnamed event>\n";
+    }
+    match (map.get("start"), map.get("end")) {
+        (Some(Value::Integer(s)), Some(Value::Integer(e))) => {
+            text += &format!("{} - {}\n", ts_to_local_str(*s), ts_to_local_str(*e));
+        }
+        (_, Some(Value::Integer(e))) => {
+            text += &format!("<start missing> - {}\n", ts_to_local_str(*e));
+        }
+        (Some(Value::Integer(s)), _) => {
+            text += &format!("{} - <end missing>-\n", ts_to_local_str(*s));
+        }
+        _ => (),
+    }
+    if let Some(Value::String(description)) = map.get("description") {
+        text += &format!("{description}\n\n");
+    } else {
+        text += "\n\n";
+    }
+
+    text
 }
