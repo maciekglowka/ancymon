@@ -60,13 +60,29 @@ impl EventHandler for ICalHandler {
 
         let calendar = self.fetch().await?;
 
-        let events = calendar
+        let mut events = calendar
             .events()
             .flat_map(|ev| {
                 get_in_range(ev, &start, &end)
                     .into_iter()
                     .map(|(s, e)| map_event(ev, &s, &e))
             })
+            .collect::<Vec<_>>();
+
+        if events.is_empty() {
+            return Ok(Value::Null);
+        }
+
+        events.sort_by_key(|e| {
+            e.as_map()
+                .unwrap()
+                .get("start")
+                .map(|v| v.as_int().unwrap_or(i64::MAX))
+                .unwrap_or(i64::MAX)
+        });
+
+        let events = events
+            .into_iter()
             .map(|e| {
                 if arguments.text_output {
                     Value::String(format_text(&e))
