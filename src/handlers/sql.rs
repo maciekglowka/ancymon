@@ -167,8 +167,6 @@ fn map_db_value(row: &AnyRow, idx: usize) -> Result<Value, AncymonError> {
         .type_info()
         .kind();
 
-    println!("{kind:?}");
-
     match kind {
         AnyTypeInfoKind::Null => Ok(Value::Null),
         AnyTypeInfoKind::Bool => Ok(map_nullable!(Bool, row, bool, idx)),

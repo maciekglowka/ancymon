@@ -25,7 +25,9 @@ impl Config {
         let mut value: toml::Value =
             toml::from_str(s).map_err(|e| ConfigError::ParsingError(format!("{e}")))?;
         Self::expand_env_variables(&mut value)?;
-        Ok(value.try_into().unwrap())
+        value
+            .try_into::<Self>()
+            .map_err(|e| ConfigError::ParsingError(e.to_string()).into())
     }
     fn expand_env_variables(value: &mut toml::Value) -> Result<(), AncymonError> {
         match value {

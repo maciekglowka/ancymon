@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -30,8 +34,13 @@ impl Bot {
         let handlers = self.build_handlers(&config).await?;
         let actions = self.build_actions(&config).await?;
 
-        self.init_trigger_sources(&config).await?;
-        let sources = self.trigger_sources.into_values().collect();
+        let active_sources = self.init_trigger_sources(&config).await?;
+        let sources = self
+            .trigger_sources
+            .into_iter()
+            .filter(|(k, _)| active_sources.contains(k))
+            .map(|(_, v)| v)
+            .collect();
 
         let (tx, rx) = tokio::sync::mpsc::channel(QUEUE_SIZE);
 
@@ -116,8 +125,13 @@ impl Bot {
         Ok(actions)
     }
 
-    async fn init_trigger_sources(&mut self, config: &Config) -> Result<(), AncymonError> {
+    /// Returns source list to activate
+    async fn init_trigger_sources(
+        &mut self,
+        config: &Config,
+    ) -> Result<HashSet<String>, AncymonError> {
         let mut triggers: HashMap<String, Vec<Trigger>> = HashMap::new();
+        let mut sources = HashSet::new();
 
         for trigger in config.triggers.iter() {
             if let Some(entry) = triggers.get_mut(&trigger.source) {
@@ -128,6 +142,7 @@ impl Bot {
         }
 
         for (source_name, triggers) in triggers {
+            sources.insert(source_name.to_string());
             let source = self
                 .trigger_sources
                 .get_mut(&source_name)
@@ -144,7 +159,7 @@ impl Bot {
                 .await?;
         }
 
-        Ok(())
+        Ok(sources)
     }
 }
 

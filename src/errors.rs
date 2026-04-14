@@ -28,6 +28,7 @@ impl serde::de::Error for AncymonError {
 
 #[derive(Clone, Debug)]
 pub enum ConfigError {
+    ReadError(String),
     ParsingError(String),
     MissingValue(String),
     InvalidValue(String),
