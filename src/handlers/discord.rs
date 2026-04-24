@@ -9,14 +9,41 @@ use crate::{
     values::Value,
 };
 
-/// Sends DM messages to selected user.
+/// The `DiscordDmHandler` enables sending direct messages to a specific Discord user
+/// via a Discord bot connection.
 ///
-/// The base message content comes from `arguments.message` field in the config.
-/// If `arguments.include-event` field is set to true, the contents of the
-/// triggering event is also included as a subsequent message(s).
-/// If the event value is of a string type, it will be send as it is.
-/// If the event value is an array, it will be send as a series of messages.
-/// Otherwise the value will be sent pretty printed.
+/// Configuration
+///
+/// This handler requires the following configuration values:
+///
+/// - `bot-token`: The Discord bot token used to authenticate API requests.
+/// - `user-id`: The Discord user ID of the recipient.
+///
+/// Usage
+///
+/// Message content is be configured through the `arguments.message` field.
+/// By default, only the configured message is sent. To include additional event context
+/// data along with your message, set `arguments.include-event` to `true`.
+///
+/// When `include-event` is enabled, the handler will:
+/// - First, Send the configured `arguments.message`
+/// - Then, send the event payload in a separate message or messages (if an array is passed).
+/// Values that are not strings (Value::String) will be pretty-printed.
+///
+/// Usage Example (please note that Ancymon supports env variables expansion):
+///
+/// ```toml
+/// [handlers.discord-dm]
+/// type = "discord-dm"
+/// user-id = "${DISCORD_USER_ID}"
+/// bot-token = "${DISCORD_TOKEN}"
+///
+/// [[actions]]
+/// handler = "discord-dm"
+/// event = "calendar-trigger"
+/// arguments.message = "Calendar event"
+/// arguments.include-event = true
+/// ```
 pub struct DiscordDmHandler {
     http: Option<Http>,
     channel: PrivateChannel,

@@ -9,6 +9,34 @@ use crate::{
     values::Value,
 };
 
+/// A trigger source that executes actions at specified cron intervals,
+/// similar to system cron jobs.
+///
+/// 7-field cron format is used:
+/// `sec  min   hour   day of month   month   day of week   year`
+/// Please refer to the `cron` crate documentation for more details:
+/// <https://docs.rs/cron/latest/cron/>
+///
+/// Output value
+///
+/// Trigger emits an integer (Value::Integer) contaning a current Unix timestamp.
+///
+/// Usage example (sets two independent triggers):
+///
+/// ```toml
+/// [sources.cron]
+/// type = "cron"
+///
+/// [[triggers]]
+/// source = "cron"
+/// emit = "2-sec-trigger"
+/// arguments = "*/2 * * * * *"  # Every 2 seconds
+///
+/// [[triggers]]
+/// source = "cron"
+/// emit = "3-sec-trigger"
+/// arguments = "*/3 * * * * *"  # Every 3 seconds
+/// ```
 #[derive(Default)]
 pub struct CronTrigger {
     entries: BinaryHeap<CronEntry>,

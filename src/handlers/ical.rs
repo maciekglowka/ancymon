@@ -12,6 +12,61 @@ use crate::{
     values::Value,
 };
 
+/// An event handler that retrieves and formats events from an iCalendar (iCal) calendar.
+///
+/// This handler fetches events from a remote iCalendar URL and returns them either as
+/// structured data or formatted text, depending on the provided arguments.
+///
+/// Configuration
+///
+/// The handler requires a `url` field in its configuration:
+///
+/// ```toml
+/// [handlers.ical]
+/// type = "ical"
+/// url = "https://example.com/calendar.ics"
+/// ```
+///
+/// Usage
+///
+/// The handler can be triggered by an event containing a Unix timestamp and will search
+/// for events within a specified time window relative to the timestamp.
+///
+/// For example you can run the below configuration at 20:00 daily (providing current timestamp
+/// as an input to collect events for the next day:
+///
+/// ```toml
+/// [[actions]]
+/// handler = "ical"
+/// event = "some-trigger-event"
+/// emit = "ical-events"
+/// arguments.start-offset-hours = 4      # Set the window start 4 hours after the provided timestamp
+/// arguments.range-hours = 24            # Set the window end 24 hours after the start
+/// arguments.text-output = true          # Return formatted text instead of structured data
+/// ```
+///
+/// Return Value
+///
+/// The handler returns a `Value::Array` containing either:
+///
+/// 1. **Structured events** (`text-output = false`): Each element is a `Value::Map`
+///    with the following fields:
+///    - `start` (i64): Unix timestamp (seconds since epoch) of event start
+///    - `end` (i64): Unix timestamp of event end
+///    - `summary` (Optional String): Event summary/title
+///    - `description` (Optional String): Event description
+///
+/// 2. **Formatted text** (`text-output = true`): Each element is a `Value::String`
+///    containing a formatted event summary in Markdown format:
+///    - Event title in a heading
+///    - Time range (formatted as local datetime)
+///    - Description (if available)
+///
+/// The event are sorted by start time.
+/// Handles recurring events defined with `RRULE`
+///
+/// If no events are found within the specified time window, the handler returns
+/// `Value::Null`.
 #[derive(Clone, Default)]
 pub struct ICalHandler {
     url: String,
@@ -37,7 +92,27 @@ impl EventHandler for ICalHandler {
         Ok(())
     }
 
-    /// Expects timestamp as event input
+    /// Queries an iCalendar (iCal) calendar for events within a specified time window.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - A `&Value` expected to contain the base event's Unix timestamp (integer seconds).
+    ///   This timestamp is used to establish the base date for the search window.
+    /// * `arguments` - A `&Value` expected to contain `ICalArguments`, specifying:
+    ///   - `start-offset-hours` (i64): Hours to add to the base timestamp for the query window start
+    ///   - `range-hours` (i64): Duration of the query window in hours
+    ///   - `text-output` (bool, default: false): If true, outputs formatted text instead of structured data
+    /// * `_` - A mutable reference to `EventMeta`, which is currently unused.
+    ///
+    /// # Returns
+    ///
+    /// * `Result<Value, AncymonError>`:
+    ///   - If no events are found in the specified range, it returns `Ok(Value::Null)`.
+    ///   - If events are found:
+    ///     - If `arguments.text_output` is `true`, it returns `Ok(Value::Array)` containing strings,
+    ///       where each string is a formatted, human-readable summary of an event.
+    ///     - Otherwise, it returns `Ok(Value::Array)` where each element is a `Value::Map`
+    ///       containing structured event data: `{"start": timestamp, "end": timestamp, "summary": string, ...}`.
     async fn execute(
         &self,
         event: &Value,

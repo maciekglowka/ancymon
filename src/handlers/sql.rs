@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use sqlx::{
-    any::{install_default_drivers, AnyArguments, AnyRow, AnyStatement, AnyTypeInfoKind},
-    query::Query,
     Any, AnyConnection, Column, Connection, Executor, Row, Statement,
+    any::{AnyArguments, AnyRow, AnyStatement, AnyTypeInfoKind, install_default_drivers},
+    query::Query,
 };
 
 use crate::{
@@ -19,6 +19,59 @@ struct SqlConfig {
     connection_string: String,
 }
 
+/// A handler for executing SQL queries against various database backends.
+///
+/// Configuration:
+///
+/// The handler is configured via a [SqlConfig] struct containing:
+/// - `connection-string`: A URI-style connection string for the database.
+///    (please refer to sqlx::AnyConnection docs:
+///    <https://docs.rs/sqlx/latest/sqlx/struct.AnyConnection.html>)
+///
+/// Query Parameters:
+///
+/// Queries handle parameter binding via the `event` argument:
+/// - Single parameter: Pass a single [Value] as the event
+/// - Multiple parameters: Pass an [Value::Array] as the event
+/// - Parameters are positionally bound using `?` placeholders in the SQL query
+///
+/// Fetch Mode:
+///
+/// The handler supports two fetch modes controlled by the `fetch-many` argument:
+/// - `false` (default): Executes query and returns first row as [Value::Array]
+///   or scalar [Value] if query returns single column.
+/// - `true`: Executes query and returns all rows as [Value::Array]
+///   (array of arrays or array of scalars - depending on the number of columns).
+///
+/// Supported Data Types:
+///
+/// The handler supports the following SQL data types, mapped to internal [Value] types:
+/// - NULL -> `Value::Null`
+/// - BOOLEAN -> `Value::Bool(true|false)`
+/// - INTEGER (SMALLINT, INTEGER, BIGINT) -> `Value::Integer`
+/// - REAL/D_FLOAT -> `Value::Float`
+/// - TEXT -> `Value::String`
+/// - BLOB -> Not supported (returns error)
+///
+/// Usage Example:
+///
+/// ```toml
+/// [handlers.sensor-sql]
+/// type = "sql"
+/// connection-string = "sqlite://examples/temperature.db"
+///
+/// [[actions]]
+/// handler = "sensor-sql"
+/// event = "temperature-trigger"
+/// emit = "temperature-query"
+/// arguments.query = """
+///   SELECT cast(value as real)
+///   FROM sensors
+///   WHERE sensor_id = 'temp_0'
+///   ORDER BY timestamp DESC
+///   LIMIT 1
+/// """
+/// ```
 #[derive(Clone, Default)]
 pub struct SqlHandler {
     config: SqlConfig,

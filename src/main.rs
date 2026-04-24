@@ -13,6 +13,7 @@ use std::fs;
 async fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
+        .with_timer(tracing_subscriber::fmt::time::ChronoLocal::rfc_3339())
         .init();
 
     let config = match get_config() {

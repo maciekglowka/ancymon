@@ -12,6 +12,8 @@ RUN cargo build --target=x86_64-unknown-linux-musl --release
 # Runner
 FROM alpine:latest
 
+RUN apk add --no-cache tzdata
+
 COPY --from=build /app/target/x86_64-unknown-linux-musl/release/ancymon /srv/ancymon
 WORKDIR /srv
 

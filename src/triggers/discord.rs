@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serenity::all::{
     ClientBuilder, Context, EventHandler as DiscordHandler, GatewayIntents, Message, Ready,
 };
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 use crate::{
     errors::{AncymonError, BuildError, ConfigError},
@@ -14,6 +14,29 @@ use crate::{
     values::Value,
 };
 
+/// A trigger source that listens for command messages in a Discord channel.
+///
+/// Each command must be registered in the config file as a trigger argument.
+/// It has to start with a `!` prefix and can contain an extra string payload.
+/// E.g. `!print some content`.
+///
+/// Output value
+///
+/// Trigger emits either Value::String event, if payload was found or Value::Null otherwise.
+/// Additionaly event meta will contain a "discord_original_user_id" string field,
+/// containing Discord Id of the user that send the trigger message.
+///
+/// Usage Example (please note that Ancymon supports env variables expansion):
+/// ```toml
+/// [sources.discord-command]
+/// type = "discord-command"
+/// bot-token = "${DISCORD_TOKEN}"
+///
+/// [[triggers]]
+/// source = "discord-command"
+/// emit = "debug-trigger"
+/// arguments = "!debug"
+/// ```
 #[derive(Default)]
 pub struct DiscordCommandTrigger {
     cmd_rx: Option<Receiver<Command>>,
@@ -96,15 +119,17 @@ impl DiscordHandler for CommandHandler {
         if msg.content.chars().next() != Some('!') {
             return;
         };
-        let Some((command, tail)) = msg.content.split_once(' ') else {
-            tracing::debug!("Could not parse message as command: {msg:?}");
-            return;
+        let (command, payload) = match msg.content.split_once(' ') {
+            // Has string payload.
+            Some((command, tail)) => (command, Value::String(tail.to_string())),
+            // Just the command.
+            None => (msg.content.as_str(), Value::Null),
         };
         if let Some(entry) = self.entries.get(command) {
             self.cmd_tx
                 .send(Command {
                     emit: entry.emit.to_string(),
-                    content: Value::String(tail.to_string()),
+                    content: payload,
                     user_id: msg.author.id.to_string(),
                 })
                 .await
