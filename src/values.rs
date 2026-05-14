@@ -114,6 +114,56 @@ impl Value {
     }
 }
 
+impl mlua::FromLua for Value {
+    fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
+        match value {
+            mlua::Value::Nil => Ok(Value::Null),
+            mlua::Value::Boolean(b) => Ok(Value::Bool(b)),
+            mlua::Value::Integer(i) => Ok(Value::Integer(i)),
+            mlua::Value::Number(n) => Ok(Value::Float(n)),
+            mlua::Value::String(s) => Ok(Value::String(s.to_string_lossy())),
+            mlua::Value::Table(t) => {
+                // Check if array or map
+                match t.sequence_values::<mlua::Value>().count() {
+                    0 => {
+                        // Only mapped values
+                        let map = t
+                            .pairs::<String, Value>()
+                            .flat_map(|r| r.map(|(k, v)| Ok((k, v))))
+                            .collect::<Result<Vec<(String, Value)>, mlua::Error>>()?;
+
+                        Ok(Value::Map(HashMap::from_iter(map)))
+                    }
+                    n => {
+                        // Check if also has other keys
+                        if t.len()? > n as i64 {
+                            return Err(mlua::Error::FromLuaConversionError {
+                                from: "Table",
+                                to: "Value".to_string(),
+                                message: Some(
+                                    "Mixing sequence and keyed values in tables is not supported"
+                                        .to_string(),
+                                ),
+                            });
+                        }
+                        Ok(Value::Array(
+                            t.sequence_values::<Value>()
+                                .flat_map(|r| r.map(|a| Ok(a)))
+                                .collect::<Result<Vec<Value>, mlua::Error>>()?,
+                        ))
+                    }
+                }
+            }
+            v => Err(mlua::Error::FromLuaConversionError {
+                // FIXME
+                from: std::any::type_name_of_val(&v),
+                to: "Value".to_string(),
+                message: None,
+            }),
+        }
+    }
+}
+
 struct ValueVisitor;
 impl<'de> de::Visitor<'de> for ValueVisitor {
     type Value = Value;

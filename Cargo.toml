@@ -8,6 +8,7 @@ async-trait = "0.1"
 chrono = "0.4"
 cron = "0.15"
 icalendar = { version = "0.17", features = ["chrono-tz"] }
+mlua = { version = "0.11", features = ["lua55", "send", "vendored"] }
 openssl = { version = "0.10", features = ["vendored"] }
 regex = "1.12"
 reqwest = "0.13"
@@ -16,6 +17,8 @@ serde = { version = "1.0", features = ["derive"] }
 serenity = { version = "0.12", features = ["client", "gateway", "rustls_backend", "model"] }
 sqlx = { version = "0.8", features = ["any", "runtime-tokio-native-tls", "sqlite"]}
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
-toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["chrono"] }
+
+[dev-dependencies]
+toml = "0.9"
