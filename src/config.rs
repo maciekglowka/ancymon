@@ -3,8 +3,8 @@ use regex::Regex;
 use std::collections::HashMap;
 
 use crate::{
-    actions::Action,
     errors::{AncymonError, ConfigError},
+    handlers::Handler,
     triggers::Trigger,
     values::Value,
 };
@@ -17,7 +17,7 @@ static ENV_REGEX: std::sync::LazyLock<Regex> =
 pub struct Config {
     pub(crate) sources: HashMap<String, Value>,
     pub(crate) tools: HashMap<String, Value>,
-    pub(crate) actions: Vec<Action>,
+    pub(crate) handlers: Vec<Handler>,
     pub(crate) triggers: Vec<Trigger>,
 }
 impl Config {
@@ -35,22 +35,22 @@ impl Config {
             .get::<HashMap<String, Value>>("sources")
             .map_err(|e| ConfigError::ParsingError(format!("Sources map parse error: {e}")))?;
 
-        let handlers = globals
-            .get::<HashMap<String, Value>>("handlers")
-            .map_err(|e| ConfigError::ParsingError(format!("Handlers map parse error: {e}")))?;
+        let tools = globals
+            .get::<HashMap<String, Value>>("tools")
+            .map_err(|e| ConfigError::ParsingError(format!("Tools map parse error: {e}")))?;
 
         let triggers = globals
             .get::<Vec<Trigger>>("triggers")
             .map_err(|e| ConfigError::ParsingError(format!("Triggers array parse error: {e}")))?;
 
-        let actions = globals
-            .get::<Vec<Action>>("actions")
-            .map_err(|e| ConfigError::ParsingError(format!("Actions array parse error: {e}")))?;
+        let handlers = globals
+            .get::<Vec<Handler>>("handlers")
+            .map_err(|e| ConfigError::ParsingError(format!("Handlers array parse error: {e}")))?;
 
         Ok(Self {
             sources,
             handlers,
-            actions,
+            tools,
             triggers,
         })
     }
