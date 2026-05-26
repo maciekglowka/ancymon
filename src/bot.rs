@@ -11,7 +11,7 @@ use crate::{
     config::Config,
     errors::{AncymonError, ConfigError},
     events::{pack_error, Event},
-    handlers::{EventHandler, HandlerBuilder},
+    tools::{Tool, ToolBuilder},
     triggers::{Trigger, TriggerSource},
     values::Value,
 };
@@ -20,18 +20,18 @@ const QUEUE_SIZE: usize = 256;
 
 struct BotContext {
     actions: HashMap<String, Vec<Action>>,
-    handlers: HashMap<String, Box<dyn EventHandler + Send + Sync>>,
+    tools: HashMap<String, Box<dyn Tool + Send + Sync>>,
     tx: Sender<Event>,
 }
 
 #[derive(Default)]
 pub struct Bot {
-    handler_builders: HashMap<String, Box<dyn HandlerBuilder>>,
+    tool_builders: HashMap<String, Box<dyn ToolBuilder>>,
     trigger_sources: HashMap<String, Box<dyn TriggerSource + Send + Sync>>,
 }
 impl Bot {
     pub async fn run(mut self, config: Config) -> Result<(), AncymonError> {
-        let handlers = self.build_handlers(&config).await?;
+        let tools = self.build_tools(&config).await?;
         let actions = self.build_actions(&config).await?;
 
         let active_sources = self.init_trigger_sources(&config).await?;
@@ -46,7 +46,7 @@ impl Bot {
 
         let context = BotContext {
             actions,
-            handlers,
+            tools,
             tx: tx.clone(),
         };
 
@@ -56,13 +56,13 @@ impl Bot {
         Ok(())
     }
 
-    pub fn with_handler_type<T: HandlerBuilder + 'static>(
+    pub fn with_tool_type<T: ToolBuilder + 'static>(
         mut self,
         name: impl Into<String>,
         builder: T,
     ) -> Self {
-        self.handler_builders
-            .insert(name.into(), Box::new(builder) as Box<dyn HandlerBuilder>);
+        self.tool_builders
+            .insert(name.into(), Box::new(builder) as Box<dyn ToolBuilder>);
         self
     }
 
@@ -78,35 +78,35 @@ impl Bot {
         self
     }
 
-    async fn build_handlers(
+    async fn build_tool(
         &self,
         config: &Config,
-    ) -> Result<HashMap<String, Box<dyn EventHandler + Send + Sync>>, AncymonError> {
-        let mut handlers = HashMap::new();
+    ) -> Result<HashMap<String, Box<dyn Tool + Send + Sync>>, AncymonError> {
+        let mut tools = HashMap::new();
 
-        for (name, handler_config) in config.handlers.iter() {
-            let builder = handler_config
+        for (name, tool_config) in config.tools.iter() {
+            let builder = tool_config
                 .as_map()
                 .ok_or(ConfigError::InvalidValueType(format!(
-                    "Expected map as handler config. Found: {handler_config:?}"
+                    "Expected map as tool config. Found: {tool_config:?}"
                 )))?
                 .get("type")
                 .ok_or(ConfigError::MissingValue(format!(
-                    "Key not found: `type` at handler config {name}"
+                    "Key not found: `type` at tool config {name}"
                 )))?
                 .as_str()
                 .ok_or(ConfigError::InvalidValueType(format!(
-                    "Expected string for key `type` at handler config {name}"
+                    "Expected string for key `type` at tool config {name}"
                 )))?;
-            let mut handler = self
-                .handler_builders
+            let mut tool = self
+                .tool_builders
                 .get(builder)
-                .ok_or(ConfigError::InvalidHandlerType(builder.to_string()))?
+                .ok_or(ConfigError::InvalidToolType(builder.to_string()))?
                 .build()?;
-            handler.init(handler_config).await?;
-            handlers.insert(name.to_string(), handler);
+            tool.init(tool_config).await?;
+            tools.insert(name.to_string(), tool);
         }
-        Ok(handlers)
+        Ok(tools)
     }
 
     async fn build_actions(
@@ -220,9 +220,9 @@ async fn execute_single(mut event: Event, action_idx: usize, context: &Arc<BotCo
         return;
     };
     let action = &actions[action_idx];
-    let Some(handler) = context.handlers.get(&action.handler) else {
+    let Some(tool) = context.tools.get(&action.tool) else {
         // Should never actually happen.
-        tracing::error!("Handler not found: {}", action.handler);
+        tracing::error!("Tool not found: {}", action.handler);
         return;
     };
 
@@ -233,7 +233,7 @@ async fn execute_single(mut event: Event, action_idx: usize, context: &Arc<BotCo
     let mut retries = action.max_retries;
 
     loop {
-        let result = match handler
+        let result = match tool
             .execute(value, &action.arguments, &mut event.meta)
             .await
         {
@@ -276,19 +276,14 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use crate::{events::EventMeta, triggers::StartupTrigger};
+    use crate::triggers::StartupTrigger;
 
     use super::*;
 
-    struct CounterHandler(Arc<AtomicU64>);
+    struct Counter(Arc<AtomicU64>);
     #[async_trait]
-    impl EventHandler for CounterHandler {
-        async fn execute(
-            &self,
-            _: &Value,
-            arguments: &Value,
-            _: &mut EventMeta,
-        ) -> Result<Value, AncymonError> {
+    impl Tool for Counter {
+        async fn execute(&self, arguments: &Value) -> Result<Value, AncymonError> {
             let a = arguments.as_int().ok_or(ConfigError::InvalidValue(format!(
                 "Invalid arguments {arguments:?}"
             )))? as u64;
@@ -297,9 +292,9 @@ mod tests {
         }
     }
     struct CounterBuilder(Arc<AtomicU64>);
-    impl HandlerBuilder for CounterBuilder {
-        fn build(&self) -> Result<Box<dyn EventHandler + Send + Sync>, AncymonError> {
-            Ok(Box::new(CounterHandler(self.0.clone())))
+    impl ToolBuilder for CounterBuilder {
+        fn build(&self) -> Result<Box<dyn Tool + Send + Sync>, AncymonError> {
+            Ok(Box::new(Counter(self.0.clone())))
         }
     }
 

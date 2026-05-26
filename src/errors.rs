@@ -35,7 +35,7 @@ pub enum ConfigError {
     InvalidValueType(String),
     MissingConfig(String),
     InvalidSource(String),
-    InvalidHandlerType(String),
+    InvalidToolType(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -77,7 +77,7 @@ pub enum RuntimeError {
     InvalidArguments(String),
     InvalidArgumentType(String),
     Bot(String),
-    Handler(String),
+    Tool(String),
     Source(String),
 }
 

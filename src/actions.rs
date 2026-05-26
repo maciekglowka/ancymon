@@ -4,7 +4,7 @@ use crate::values::Value;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Action {
-    pub(crate) handler: String,
+    pub(crate) tool: String,
     pub(crate) event: String,
     pub(crate) emit: String,
     pub(crate) arguments: Value,
@@ -16,7 +16,7 @@ impl mlua::FromLua for Action {
     fn from_lua(value: mlua::Value, _: &mlua::Lua) -> mlua::Result<Self> {
         match value {
             mlua::Value::Table(t) => Ok(Action {
-                handler: t.get("handler")?,
+                tool: t.get("tool")?,
                 event: t.get("event")?,
                 emit: t.get("emit")?,
                 arguments: t.get("arguments").unwrap_or_default(),

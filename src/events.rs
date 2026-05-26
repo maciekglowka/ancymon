@@ -20,7 +20,7 @@ impl Event {
     }
     /// Spawn an event with inherited meta.
     ///
-    /// Meant for use as a subsequent eent in the handlers.
+    /// Meant for use as a subsequent event in the handlers.
     pub fn with_meta(name: String, value: Result<Value, Value>, meta: EventMeta) -> Self {
         Self { name, value, meta }
     }

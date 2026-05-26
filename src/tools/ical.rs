@@ -8,14 +8,16 @@ use serde::Deserialize;
 use crate::{
     errors::{AncymonError, RuntimeError},
     events::EventMeta,
-    handlers::EventHandler,
+    tools::Tool,
     values::Value,
 };
 
-/// An event handler that retrieves and formats events from an iCalendar (iCal) calendar.
+/// An event handler that retrieves and formats events from an iCalendar (iCal)
+/// calendar.
 ///
-/// This handler fetches events from a remote iCalendar URL and returns them either as
-/// structured data or formatted text, depending on the provided arguments.
+/// This handler fetches events from a remote iCalendar URL and returns them
+/// either as structured data or formatted text, depending on the provided
+/// arguments.
 ///
 /// Configuration
 ///
@@ -29,11 +31,12 @@ use crate::{
 ///
 /// Usage
 ///
-/// The handler can be triggered by an event containing a Unix timestamp and will search
-/// for events within a specified time window relative to the timestamp.
+/// The handler can be triggered by an event containing a Unix timestamp and
+/// will search for events within a specified time window relative to the
+/// timestamp.
 ///
-/// For example you can run the below configuration at 20:00 daily (providing current timestamp
-/// as an input to collect events for the next day:
+/// For example you can run the below configuration at 20:00 daily (providing
+/// current timestamp as an input to collect events for the next day:
 ///
 /// ```toml
 /// [[actions]]
@@ -49,15 +52,15 @@ use crate::{
 ///
 /// The handler returns a `Value::Array` containing either:
 ///
-/// 1. **Structured events** (`text-output = false`): Each element is a `Value::Map`
-///    with the following fields:
+/// 1. **Structured events** (`text-output = false`): Each element is a
+///    `Value::Map` with the following fields:
 ///    - `start` (i64): Unix timestamp (seconds since epoch) of event start
 ///    - `end` (i64): Unix timestamp of event end
 ///    - `summary` (Optional String): Event summary/title
 ///    - `description` (Optional String): Event description
 ///
-/// 2. **Formatted text** (`text-output = true`): Each element is a `Value::String`
-///    containing a formatted event summary in Markdown format:
+/// 2. **Formatted text** (`text-output = true`): Each element is a
+///    `Value::String` containing a formatted event summary in Markdown format:
 ///    - Event title in a heading
 ///    - Time range (formatted as local datetime)
 ///    - Description (if available)
@@ -68,10 +71,10 @@ use crate::{
 /// If no events are found within the specified time window, the handler returns
 /// `Value::Null`.
 #[derive(Clone, Default)]
-pub struct ICalHandler {
+pub struct ICalReader {
     url: String,
 }
-impl ICalHandler {
+impl ICalReader {
     async fn fetch(&self) -> Result<Calendar, AncymonError> {
         let body = reqwest::get(&self.url)
             .await
@@ -85,34 +88,42 @@ impl ICalHandler {
 }
 
 #[async_trait]
-impl EventHandler for ICalHandler {
+impl Tool for ICalReader {
     async fn init(&mut self, config: &Value) -> Result<(), AncymonError> {
         let config: ICalConfig = config.clone().try_into()?;
         self.url = config.url;
         Ok(())
     }
 
-    /// Queries an iCalendar (iCal) calendar for events within a specified time window.
+    /// Queries an iCalendar (iCal) calendar for events within a specified time
+    /// window.
     ///
     /// # Arguments
     ///
-    /// * `event` - A `&Value` expected to contain the base event's Unix timestamp (integer seconds).
-    ///   This timestamp is used to establish the base date for the search window.
-    /// * `arguments` - A `&Value` expected to contain `ICalArguments`, specifying:
-    ///   - `start-offset-hours` (i64): Hours to add to the base timestamp for the query window start
+    /// * `event` - A `&Value` expected to contain the base event's Unix
+    ///   timestamp (integer seconds). This timestamp is used to establish the
+    ///   base date for the search window.
+    /// * `arguments` - A `&Value` expected to contain `ICalArguments`,
+    ///   specifying:
+    ///   - `start-offset-hours` (i64): Hours to add to the base timestamp for
+    ///     the query window start
     ///   - `range-hours` (i64): Duration of the query window in hours
-    ///   - `text-output` (bool, default: false): If true, outputs formatted text instead of structured data
+    ///   - `text-output` (bool, default: false): If true, outputs formatted
+    ///     text instead of structured data
     /// * `_` - A mutable reference to `EventMeta`, which is currently unused.
     ///
     /// # Returns
     ///
     /// * `Result<Value, AncymonError>`:
-    ///   - If no events are found in the specified range, it returns `Ok(Value::Null)`.
+    ///   - If no events are found in the specified range, it returns
+    ///     `Ok(Value::Null)`.
     ///   - If events are found:
-    ///     - If `arguments.text_output` is `true`, it returns `Ok(Value::Array)` containing strings,
-    ///       where each string is a formatted, human-readable summary of an event.
-    ///     - Otherwise, it returns `Ok(Value::Array)` where each element is a `Value::Map`
-    ///       containing structured event data: `{"start": timestamp, "end": timestamp, "summary": string, ...}`.
+    ///     - If `arguments.text_output` is `true`, it returns
+    ///       `Ok(Value::Array)` containing strings, where each string is a
+    ///       formatted, human-readable summary of an event.
+    ///     - Otherwise, it returns `Ok(Value::Array)` where each element is a
+    ///       `Value::Map` containing structured event data: `{"start":
+    ///       timestamp, "end": timestamp, "summary": string, ...}`.
     async fn execute(
         &self,
         event: &Value,
@@ -173,10 +184,8 @@ impl EventHandler for ICalHandler {
 
 #[derive(Deserialize)]
 struct ICalArguments {
-    #[serde(rename = "start-offset-hours")]
-    start_offset_hours: i64,
-    #[serde(rename = "range-hours")]
-    range_hours: i64,
+    start: i64,
+    end: i64,
     #[serde(default)]
     #[serde(rename = "text-output")]
     text_output: bool,
@@ -191,7 +200,7 @@ struct ICalConfig {
 ///
 /// For a single event it simply returns a 1-element vec,
 /// if the event is within the range or an empty vec otherwise.
-/// For reccurring events a list of all matching dates is returned.
+/// For recurring events a list of all matching dates is returned.
 fn get_in_range(
     event: &icalendar::Event,
     start: &DateTime<Local>,

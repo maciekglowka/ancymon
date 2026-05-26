@@ -16,7 +16,7 @@ static ENV_REGEX: std::sync::LazyLock<Regex> =
 #[derive(Debug)]
 pub struct Config {
     pub(crate) sources: HashMap<String, Value>,
-    pub(crate) handlers: HashMap<String, Value>,
+    pub(crate) tools: HashMap<String, Value>,
     pub(crate) actions: Vec<Action>,
     pub(crate) triggers: Vec<Trigger>,
 }

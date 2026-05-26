@@ -1,15 +1,14 @@
 use async_trait::async_trait;
 use serde::Deserialize;
 use sqlx::{
-    Any, AnyConnection, Column, Connection, Executor, Row, Statement,
-    any::{AnyArguments, AnyRow, AnyStatement, AnyTypeInfoKind, install_default_drivers},
+    any::{install_default_drivers, AnyArguments, AnyRow, AnyStatement, AnyTypeInfoKind},
     query::Query,
+    Any, AnyConnection, Column, Connection, Executor, Row, Statement,
 };
 
 use crate::{
     errors::{AncymonError, BuildError, RuntimeError},
-    events::EventMeta,
-    handlers::EventHandler,
+    tools::Tool,
     values::Value,
 };
 
@@ -19,11 +18,11 @@ struct SqlConfig {
     connection_string: String,
 }
 
-/// A handler for executing SQL queries against various database backends.
+/// A tool for executing SQL queries against various database backends.
 ///
 /// Configuration:
 ///
-/// The handler is configured via a [SqlConfig] struct containing:
+/// The tool is configured via a [SqlConfig] struct containing:
 /// - `connection-string`: A URI-style connection string for the database.
 ///    (please refer to sqlx::AnyConnection docs:
 ///    <https://docs.rs/sqlx/latest/sqlx/struct.AnyConnection.html>)
@@ -37,15 +36,17 @@ struct SqlConfig {
 ///
 /// Fetch Mode:
 ///
-/// The handler supports two fetch modes controlled by the `fetch-many` argument:
+/// The tool supports two fetch modes controlled by the `fetch-many`
+/// argument:
 /// - `false` (default): Executes query and returns first row as [Value::Array]
 ///   or scalar [Value] if query returns single column.
-/// - `true`: Executes query and returns all rows as [Value::Array]
-///   (array of arrays or array of scalars - depending on the number of columns).
+/// - `true`: Executes query and returns all rows as [Value::Array] (array of
+///   arrays or array of scalars - depending on the number of columns).
 ///
 /// Supported Data Types:
 ///
-/// The handler supports the following SQL data types, mapped to internal [Value] types:
+/// The tool supports the following SQL data types, mapped to internal
+/// [Value] types:
 /// - NULL -> `Value::Null`
 /// - BOOLEAN -> `Value::Bool(true|false)`
 /// - INTEGER (SMALLINT, INTEGER, BIGINT) -> `Value::Integer`
@@ -73,21 +74,10 @@ struct SqlConfig {
 /// """
 /// ```
 #[derive(Clone, Default)]
-pub struct SqlHandler {
+pub struct SqlQuery {
     config: SqlConfig,
 }
-impl SqlHandler {
-    async fn fetch_one<'a>(
-        &self,
-        connection: &mut AnyConnection,
-        query: Query<'a, Any, AnyArguments<'a>>,
-    ) -> Result<AnyRow, AncymonError> {
-        let row = query
-            .fetch_one(connection)
-            .await
-            .map_err(|e| RuntimeError::Handler(format!("Sql fetch one failed {e}")))?;
-        Ok(row)
-    }
+impl SqlQuery {
     async fn fetch_many<'a>(
         &self,
         connection: &mut AnyConnection,
@@ -114,28 +104,15 @@ impl SqlHandler {
             sqlx::Either::Right(i) => (i, None),
         };
 
-        if bind_count == 0 {
-            return Ok(query);
+        // Parameters should be guaranteed to be an array at this point.
+        for param in parameters.as_array().unwrap() {
+            query = bind_value(query, param)?;
         }
-
-        if bind_count == 1 {
-            query = bind_value(query, parameters)?;
-        } else {
-            let arr = parameters
-                .as_array()
-                .ok_or(RuntimeError::InvalidArguments(format!(
-                    "Expected multiple sql parameter bindings, found {parameters:?}"
-                )))?;
-            for param in arr {
-                query = bind_value(query, param)?;
-            }
-        }
-
         Ok(query)
     }
 }
 #[async_trait]
-impl EventHandler for SqlHandler {
+impl Tool for SqlQuery {
     async fn init(&mut self, config: &Value) -> Result<(), AncymonError> {
         install_default_drivers();
         self.config = config
@@ -144,13 +121,8 @@ impl EventHandler for SqlHandler {
             .map_err(|e| BuildError::Handler(format!("{e}")))?;
         Ok(())
     }
-    async fn execute(
-        &self,
-        event: &Value,
-        arguments: &Value,
-        _: &mut EventMeta,
-    ) -> Result<Value, AncymonError> {
-        let arguments: SqlArguments = arguments.clone().try_into()?;
+    async fn execute(&self, arguments: &Value) -> Result<Value, AncymonError> {
+        let arguments: SqlArguments = arguments.try_into()?;
 
         let mut connection = AnyConnection::connect(&self.config.connection_string)
             .await
@@ -161,19 +133,25 @@ impl EventHandler for SqlHandler {
             .await
             .map_err(|e| RuntimeError::Handler(format!("Invalid sql statement: {e}")))?;
 
-        let query = self.get_query(&stmt, event)?;
+        let params = match arguments.params {
+            Value::Null => Value::Array(vec![]),
+            a @ Value::Array(_) => a,
+            _ => {
+                return Err(RuntimeError::InvalidArgumentType(
+                    "Params: required array or null".to_string(),
+                )
+                .into())
+            }
+        };
 
-        if arguments.fetch_many {
-            let rows = self.fetch_many(&mut connection, query).await?;
-            Ok(Value::Array(
-                rows.iter()
-                    .map(map_row)
-                    .collect::<Result<Vec<_>, AncymonError>>()?,
-            ))
-        } else {
-            let row = self.fetch_one(&mut connection, query).await?;
-            map_row(&row)
-        }
+        let query = self.get_query(&stmt, &params)?;
+
+        let rows = self.fetch_many(&mut connection, query).await?;
+        Ok(Value::Array(
+            rows.iter()
+                .map(map_row)
+                .collect::<Result<Vec<_>, AncymonError>>()?,
+        ))
     }
 }
 
@@ -181,8 +159,7 @@ impl EventHandler for SqlHandler {
 struct SqlArguments {
     query: String,
     #[serde(default)]
-    #[serde(rename = "fetch-many")]
-    fetch_many: bool,
+    params: Value,
 }
 
 fn map_row(row: &AnyRow) -> Result<Value, AncymonError> {
@@ -252,7 +229,7 @@ mod tests {
 
     use super::*;
 
-    async fn db(name: &str) -> (AnyConnection, SqlHandler) {
+    async fn db(name: &str) -> (AnyConnection, SqlQuery) {
         let connection_str = format!("sqlite:file:{name}?mode=memory&cache=shared");
 
         let config = Value::Map(HashMap::from_iter(vec![(
@@ -260,7 +237,7 @@ mod tests {
             Value::String(connection_str.clone()),
         )]));
 
-        let mut handler = SqlHandler::default();
+        let mut handler = SqlQuery::default();
         handler.init(&config).await.unwrap();
 
         let conn = AnyConnection::connect(&connection_str)
@@ -291,14 +268,10 @@ mod tests {
             .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Null,
-                &Value::Map(HashMap::from_iter(vec![(
-                    "query".to_string(),
-                    Value::String("SELECT id, value FROM sensor ORDER BY value DESC;".to_string()),
-                )])),
-                &mut EventMeta::dummy(),
-            )
+            .execute(&Value::Map(HashMap::from_iter(vec![(
+                "query".to_string(),
+                Value::String("SELECT id, value FROM sensor ORDER BY value DESC;".to_string()),
+            )])))
             .await
             .unwrap();
         assert_eq!(
@@ -328,14 +301,10 @@ mod tests {
             .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Null,
-                &Value::Map(HashMap::from_iter(vec![(
-                    "query".to_string(),
-                    Value::String("SELECT value FROM sensor ORDER BY value;".to_string()),
-                )])),
-                &mut EventMeta::dummy(),
-            )
+            .execute(&Value::Map(HashMap::from_iter(vec![(
+                "query".to_string(),
+                Value::String("SELECT value FROM sensor ORDER BY value;".to_string()),
+            )])))
             .await
             .unwrap();
         assert_eq!(result, Value::Integer(7))
@@ -362,19 +331,10 @@ mod tests {
             .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Null,
-                &Value::Map(HashMap::from_iter(vec![
-                    (
-                        "query".to_string(),
-                        Value::String(
-                            "SELECT id, value FROM sensor ORDER BY value DESC;".to_string(),
-                        ),
-                    ),
-                    ("fetch-many".to_string(), Value::Bool(true)),
-                ])),
-                &mut EventMeta::dummy(),
-            )
+            .execute(&Value::Map(HashMap::from_iter(vec![(
+                "query".to_string(),
+                Value::String("SELECT id, value FROM sensor ORDER BY value DESC;".to_string()),
+            )])))
             .await
             .unwrap();
 
@@ -414,17 +374,10 @@ mod tests {
             .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Null,
-                &Value::Map(HashMap::from_iter(vec![
-                    (
-                        "query".to_string(),
-                        Value::String("SELECT value FROM sensor ORDER BY value DESC;".to_string()),
-                    ),
-                    ("fetch-many".to_string(), Value::Bool(true)),
-                ])),
-                &mut EventMeta::dummy(),
-            )
+            .execute(&Value::Map(HashMap::from_iter(vec![(
+                "query".to_string(),
+                Value::String("SELECT value FROM sensor ORDER BY value DESC;".to_string()),
+            )])))
             .await
             .unwrap();
 
@@ -450,14 +403,10 @@ mod tests {
         .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Null,
-                &Value::Map(HashMap::from_iter(vec![(
-                    "query".to_string(),
-                    Value::String("SELECT id, ts, value, extra FROM sensor;".to_string()),
-                )])),
-                &mut EventMeta::dummy(),
-            )
+            .execute(&Value::Map(HashMap::from_iter(vec![(
+                "query".to_string(),
+                Value::String("SELECT id, ts, value, extra FROM sensor;".to_string()),
+            )])))
             .await
             .unwrap();
 
@@ -493,20 +442,15 @@ mod tests {
             .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Integer(4),
-                &Value::Map(HashMap::from_iter(vec![
-                    (
-                        "query".to_string(),
-                        Value::String(
-                            "SELECT value FROM sensor WHERE value > ? ORDER BY value DESC;"
-                                .to_string(),
-                        ),
+            .execute(&Value::Map(HashMap::from_iter(vec![
+                (
+                    "query".to_string(),
+                    Value::String(
+                        "SELECT value FROM sensor WHERE value > ? ORDER BY value DESC;".to_string(),
                     ),
-                    ("fetch-many".to_string(), Value::Bool(true)),
-                ])),
-                &mut EventMeta::dummy(),
-            )
+                ),
+                ("params".to_string(), Value::Array(vec![Value::Integer(4)])),
+            ])))
             .await
             .unwrap();
 
@@ -541,20 +485,19 @@ mod tests {
             .unwrap();
 
         let result = handler
-            .execute(
-                &Value::Array(vec![Value::Integer(4), Value::String("temp".to_string())]),
-                &Value::Map(HashMap::from_iter(vec![
-                    (
-                        "query".to_string(),
-                        Value::String(
-                            "SELECT value FROM sensor WHERE value > ? AND id = ? ORDER BY value DESC;"
-                                .to_string(),
-                        ),
+            .execute(&Value::Map(HashMap::from_iter(vec![
+                (
+                    "query".to_string(),
+                    Value::String(
+                        "SELECT value FROM sensor WHERE value > ? AND id = ? ORDER BY value DESC;"
+                            .to_string(),
                     ),
-                    ("fetch-many".to_string(), Value::Bool(true)),
-                ])),
-                &mut EventMeta::dummy(),
-            )
+                ),
+                (
+                    "params".to_string(),
+                    Value::Array(vec![Value::Integer(4), Value::String("temp".to_string())]),
+                ),
+            ])))
             .await
             .unwrap();
 
